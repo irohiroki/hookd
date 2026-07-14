@@ -1,0 +1,26 @@
+[Unit]
+Description=Webhook receiver server
+Documentation=file:///home/rocky/webhook/DAEMON.md
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=rocky
+Group=rocky
+WorkingDirectory=/home/rocky/webhook
+ExecStart=/usr/bin/python3 /home/rocky/webhook/webhook.py \
+    --config /home/rocky/webhook/config.yml
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=webhook
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/home/rocky/webhook
+
+[Install]
+WantedBy=multi-user.target
