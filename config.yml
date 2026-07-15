@@ -16,8 +16,8 @@ routes: []
 #  - path: /deploy/my-app
 #    secret: ""                      # shared passphrase for HMAC-SHA256 verification; omit to skip
 #    script: /home/rocky/scripts/deploy.sh
-#    async: true                     # true = fire-and-forget (always responds 202)
-#    timeout: 60                     # seconds; ignored when async: true
+#    async: true                     # true = fire-and-forget (always responds 202); default: false
+#    timeout: 60                     # seconds; ignored when async: true; default: 30
 #    match:                          # all conditions must match; omit to match any payload
 #      ref: "refs/heads/main"
 #    env:                            # extra env vars forwarded to the script
