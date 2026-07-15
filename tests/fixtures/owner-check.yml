@@ -1,0 +1,5 @@
+routes:
+  - path: /owner-check
+    script: /home/rocky/hookd/tests/scripts/echo-owner.sh
+    async: false
+    timeout: 10

@@ -21,6 +21,8 @@ SyslogIdentifier=hookd
 NoNewPrivileges=yes
 ProtectSystem=strict
 ReadWritePaths=/home/rocky/hookd
+AmbientCapabilities=CAP_SETUID CAP_SETGID
+CapabilityBoundingSet=CAP_SETUID CAP_SETGID
 
 [Install]
 WantedBy=multi-user.target

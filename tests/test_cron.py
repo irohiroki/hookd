@@ -1,5 +1,5 @@
 """
-Unit tests for hookd.py (cron parser and env key sanitization).
+Unit tests for hookd.py (cron parser, env key sanitization, user switching).
 No running server is required.
 
 Usage:
@@ -7,11 +7,14 @@ Usage:
 """
 
 import os
+import pwd
 import sys
 from datetime import datetime
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from hookd import _NON_POSIX_RE, cron_matches, parse_cron
+from hookd import _NON_POSIX_RE, _make_preexec, _owner_env, cron_matches, parse_cron
+
+_CURRENT_USER = pwd.getpwuid(os.getuid())
 
 CASES = [
     # (cron_expr, datetime_str, expected_match)
@@ -66,6 +69,50 @@ def run():
         if result_key != expected_key:
             failures.append(f'env key {raw!r}')
         print(f'{status}  {raw!r:20s}  →  {result_key}')
+
+    print()
+    print('--- user switching (unit) ---')
+
+    # _owner_env: None → empty dict
+    result = _owner_env(None)
+    ok = result == {}
+    status = 'OK  ' if ok else 'FAIL'
+    if not ok:
+        failures.append('_owner_env(None)')
+    print(f'{status}  _owner_env(None) → {result!r}')
+
+    # _owner_env: current OS user → correct USER and HOME
+    username = _CURRENT_USER.pw_name
+    result = _owner_env(username)
+    ok = result.get('USER') == username and result.get('HOME') == _CURRENT_USER.pw_dir
+    status = 'OK  ' if ok else 'FAIL'
+    if not ok:
+        failures.append(f'_owner_env({username!r})')
+    print(f'{status}  _owner_env({username!r}) → {result!r}')
+
+    # _owner_env: nonexistent user → empty dict
+    result = _owner_env('__hookd_no_such_user__')
+    ok = result == {}
+    status = 'OK  ' if ok else 'FAIL'
+    if not ok:
+        failures.append('_owner_env(nonexistent)')
+    print(f'{status}  _owner_env("__hookd_no_such_user__") → {result!r}')
+
+    # _make_preexec: None → None
+    result = _make_preexec(None)
+    ok = result is None
+    status = 'OK  ' if ok else 'FAIL'
+    if not ok:
+        failures.append('_make_preexec(None)')
+    print(f'{status}  _make_preexec(None) is None → {ok}')
+
+    # _make_preexec: valid user → callable
+    result = _make_preexec(username)
+    ok = callable(result)
+    status = 'OK  ' if ok else 'FAIL'
+    if not ok:
+        failures.append(f'_make_preexec({username!r})')
+    print(f'{status}  _make_preexec({username!r}) is callable → {ok}')
 
     print()
     if failures:

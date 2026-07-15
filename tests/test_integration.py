@@ -25,7 +25,9 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 FIXTURES = os.path.join(HERE, 'fixtures')
 SCRIPTS = os.path.join(HERE, 'scripts')
 BASE_URL = 'http://127.0.0.1:9000'
-USERNAME = pwd.getpwuid(os.getuid()).pw_name
+_PW = pwd.getpwuid(os.getuid())
+USERNAME = _PW.pw_name
+OWNER_CHECK_FILE = os.path.join(HERE, 'owner-check.txt')
 
 
 def fail(msg):
@@ -68,6 +70,34 @@ def test_webhook():
     print(f'OK    POST {route_path} → {status} exit={body["exit_code"]}')
 
 
+def test_user_switch():
+    print('--- user switch test ---')
+    hookctl('owner-check.yml')
+    time.sleep(2)
+
+    if os.path.exists(OWNER_CHECK_FILE):
+        os.remove(OWNER_CHECK_FILE)
+
+    route_path = f'/{USERNAME}/owner-check'
+    status, body = post(route_path, {})
+    if status != 200:
+        fail(f'POST {route_path} returned {status}: {body}')
+
+    if not os.path.exists(OWNER_CHECK_FILE):
+        fail(f'script did not write to {OWNER_CHECK_FILE}')
+
+    content = open(OWNER_CHECK_FILE).read().strip()
+
+    if f'USER={USERNAME}' not in content:
+        fail(f'USER mismatch in script output: {content!r}')
+    if f'HOME={_PW.pw_dir}' not in content:
+        fail(f'HOME mismatch in script output: {content!r}')
+    if f'uid={_PW.pw_uid}' not in content:
+        fail(f'uid mismatch in script output: {content!r}')
+
+    print(f'OK    script ran with {content}')
+
+
 def test_schedule(timeout=90):
     print('--- schedule test ---')
     hookctl('schedule.yml')
@@ -98,6 +128,7 @@ def main():
     args = parser.parse_args()
 
     test_webhook()
+    test_user_switch()
     if not args.skip_schedule:
         test_schedule()
     print('\nAll integration tests passed.')

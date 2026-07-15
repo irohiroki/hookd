@@ -4,7 +4,8 @@ Two levels of tests are provided.
 
 ## Unit tests
 
-`test_cron.py` verifies the cron parser in `hookd.py` against 13 datetime cases.
+`test_cron.py` verifies the cron parser, env key sanitization, and user-switching
+helpers (`_owner_env`, `_make_preexec`) in `hookd.py`.
 No running server or EC2 access is required. Run from the repository root:
 
 ```bash
@@ -57,6 +58,9 @@ Expected output:
 --- webhook test ---
       hookctl: registered 1 route(s) for rocky — hookd will reload within 2 seconds
 OK    POST /rocky/test-hookd → 200 exit=0
+--- user switch test ---
+      hookctl: registered 1 route(s) for rocky — hookd will reload within 2 seconds
+OK    script ran with USER=rocky HOME=/home/rocky uid=1000 gid=1000
 --- schedule test ---
       hookctl: registered 1 schedule(s) for rocky — hookd will reload within 2 seconds
       waiting up to 90s for schedule "rocky/test-hookd-schedule" to fire...
@@ -65,7 +69,12 @@ OK    schedule "rocky/test-hookd-schedule" fired and exited 0
 All integration tests passed.
 ```
 
+The user switch test (`test_user_switch`) registers `fixtures/owner-check.yml`,
+triggers the route, and reads `tests/owner-check.txt` written by the script
+to confirm that `USER`, `HOME`, and `uid` match the registering OS user.
+
 ## Fixtures
 
-`fixtures/route.yml` and `fixtures/schedule.yml` are the YAML files passed to
-`hookctl` during integration tests. They reference scripts under `scripts/`.
+`fixtures/route.yml`, `fixtures/schedule.yml`, and `fixtures/owner-check.yml`
+are the YAML files passed to `hookctl` during integration tests.
+They reference scripts under `scripts/`.

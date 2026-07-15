@@ -14,6 +14,7 @@ import hmac
 import json
 import logging
 import os
+import pwd
 import re
 import signal
 import subprocess
@@ -24,10 +25,10 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from logging.handlers import RotatingFileHandler
 
+import yaml
+
 MAX_BODY_BYTES = 1 * 1024 * 1024  # 1 MB
 _NON_POSIX_RE = re.compile(r'[^A-Z0-9_]')
-
-import yaml
 
 
 # ── Config loading ────────────────────────────────────────────────────────────
@@ -64,6 +65,38 @@ def _apply_route_defaults(route):
 def _apply_schedule_defaults(sched):
     sched.setdefault('timeout', 30)
     sched.setdefault('env', {})
+
+
+# ── User switching ────────────────────────────────────────────────────────────
+
+def _drop_to_user(username):
+    """Called in the child process (after fork, before exec) to switch UID/GID.
+
+    Requires CAP_SETUID and CAP_SETGID on the parent process
+    (set via AmbientCapabilities in hookd.service).
+    """
+    pw = pwd.getpwnam(username)
+    os.initgroups(username, pw.pw_gid)
+    os.setgid(pw.pw_gid)
+    os.setuid(pw.pw_uid)
+
+
+def _make_preexec(owner):
+    """Return a preexec_fn closure for the given owner, or None for admin routes."""
+    if owner is None:
+        return None
+    return lambda: _drop_to_user(owner)
+
+
+def _owner_env(owner):
+    """Return {USER, HOME} overrides for owner, or empty dict for admin routes."""
+    if owner is None:
+        return {}
+    try:
+        pw = pwd.getpwnam(owner)
+        return {'USER': owner, 'HOME': pw.pw_dir}
+    except KeyError:
+        return {}
 
 
 # ── Cron parser ───────────────────────────────────────────────────────────────
@@ -165,6 +198,7 @@ def load_all_routes(base_cfg_path, routes_dir, logger=None):
                         continue
                     seen_paths.add(namespaced)
                     route['path'] = namespaced
+                    route['_owner'] = username
                     routes.append(route)
             except Exception as e:
                 if logger:
@@ -224,6 +258,7 @@ def load_all_schedules(base_cfg_path, routes_dir, logger=None):
                         continue
                     seen_names.add(namespaced)
                     sched['name'] = namespaced
+                    sched['_owner'] = username
                     schedules.append(sched)
             except Exception as e:
                 if logger:
@@ -281,6 +316,7 @@ def find_route(routes, path, payload):
 
 def build_webhook_env(route, payload, body_bytes, path):
     env = os.environ.copy()
+    env.update(_owner_env(route.get('_owner')))
     for key, val in payload.items():
         env_key = 'WEBHOOK_PAYLOAD_' + _NON_POSIX_RE.sub('_', key.upper())
         env[env_key] = val if isinstance(val, str) else json.dumps(val)
@@ -294,6 +330,7 @@ def build_webhook_env(route, payload, body_bytes, path):
 
 def build_schedule_env(sched, triggered_at):
     env = os.environ.copy()
+    env.update(_owner_env(sched.get('_owner')))
     env['SCHEDULE_NAME'] = sched['name']
     env['SCHEDULE_CRON'] = sched['cron']
     env['SCHEDULE_TRIGGERED_AT'] = triggered_at.isoformat()
@@ -304,10 +341,11 @@ def build_schedule_env(sched, triggered_at):
 
 # ── Script execution ──────────────────────────────────────────────────────────
 
-def run_script_sync(script, env, timeout, logger):
+def run_script_sync(script, env, timeout, logger, preexec_fn=None):
     try:
         result = subprocess.run(
-            [script], env=env, capture_output=True, text=True, timeout=timeout
+            [script], env=env, capture_output=True, text=True,
+            timeout=timeout, preexec_fn=preexec_fn,
         )
         logger.info('script=%s exit=%d', script, result.returncode)
         if result.stdout:
@@ -323,12 +361,12 @@ def run_script_sync(script, env, timeout, logger):
         return -2, str(e)
 
 
-def run_script_async(script, env, logger):
+def run_script_async(script, env, logger, preexec_fn=None):
     try:
         proc = subprocess.Popen(
             [script], env=env,
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            close_fds=True,
+            close_fds=True, preexec_fn=preexec_fn,
         )
         logger.info('script=%s launched async pid=%d', script, proc.pid)
     except Exception as e:
@@ -390,14 +428,18 @@ class HookHandler(BaseHTTPRequestHandler):
                 self._send_json(401, {'error': 'invalid signature'})
                 return
 
+        owner = route.get('_owner')
         env = build_webhook_env(route, payload, body_bytes, path)
+        preexec_fn = _make_preexec(owner)
         script = route['script']
 
         if route.get('async'):
-            run_script_async(script, env, logger)
+            run_script_async(script, env, logger, preexec_fn=preexec_fn)
             self._send_json(202, {'status': 'accepted'})
         else:
-            rc, output = run_script_sync(script, env, route.get('timeout', 30), logger)
+            rc, output = run_script_sync(
+                script, env, route.get('timeout', 30), logger, preexec_fn=preexec_fn,
+            )
             if rc == 0:
                 self._send_json(200, {'status': 'ok', 'exit_code': rc})
             else:
@@ -478,7 +520,11 @@ def main():
                 if cron_matches(sched['_parsed_cron'], triggered_at):
                     logger.info('schedule name=%s triggered', sched['name'])
                     env = build_schedule_env(sched, triggered_at)
-                    run_script_sync(sched['script'], env, sched.get('timeout', 30), logger)
+                    preexec_fn = _make_preexec(sched.get('_owner'))
+                    run_script_sync(
+                        sched['script'], env, sched.get('timeout', 30), logger,
+                        preexec_fn=preexec_fn,
+                    )
 
     for func, name in [(_watch_reload, 'watcher'), (_schedule_runner, 'scheduler')]:
         threading.Thread(target=func, daemon=True, name=name).start()
