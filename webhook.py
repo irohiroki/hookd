@@ -5,15 +5,18 @@ based on path and payload conditions defined in config.yml.
 """
 
 import argparse
+import glob
 import hashlib
 import hmac
 import json
 import logging
 import os
+import pwd
 import signal
 import subprocess
 import sys
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from logging.handlers import RotatingFileHandler
 
@@ -31,13 +34,59 @@ def load_config(path):
     cfg['log'].setdefault('level', 'INFO')
     cfg['log'].setdefault('max_bytes', 10 * 1024 * 1024)
     cfg['log'].setdefault('backup_count', 5)
+    cfg.setdefault('routes_dir', '/home/rocky/webhook/routes.d')
+    cfg.setdefault('pidfile', '/home/rocky/webhook/webhook.pid')
     cfg.setdefault('routes', [])
     for route in cfg['routes']:
-        route.setdefault('async', False)
-        route.setdefault('timeout', 30)
-        route.setdefault('env', {})
-        route.setdefault('match', {})
+        _apply_route_defaults(route)
     return cfg
+
+
+def _apply_route_defaults(route):
+    route.setdefault('async', False)
+    route.setdefault('timeout', 30)
+    route.setdefault('env', {})
+    route.setdefault('match', {})
+
+
+def load_all_routes(base_cfg_path, routes_dir, logger=None):
+    """Return merged routes from config.yml and all routes.d/*.yml files.
+
+    config.yml routes take priority. Among routes.d files, alphabetical order
+    is used and duplicate paths are skipped with a warning.
+    """
+    with open(base_cfg_path) as f:
+        base = yaml.safe_load(f)
+
+    seen_paths = set()
+    routes = []
+
+    for route in base.get('routes', []):
+        _apply_route_defaults(route)
+        seen_paths.add(route['path'])
+        routes.append(route)
+
+    if os.path.isdir(routes_dir):
+        for filepath in sorted(glob.glob(os.path.join(routes_dir, '*.yml'))):
+            try:
+                with open(filepath) as f:
+                    user_cfg = yaml.safe_load(f)
+                if not isinstance(user_cfg, dict) or 'routes' not in user_cfg:
+                    continue
+                for route in user_cfg['routes']:
+                    _apply_route_defaults(route)
+                    if route['path'] in seen_paths:
+                        if logger:
+                            logger.warning('duplicate path %s in %s — skipped',
+                                           route['path'], filepath)
+                        continue
+                    seen_paths.add(route['path'])
+                    routes.append(route)
+            except Exception as e:
+                if logger:
+                    logger.error('failed to load %s: %s', filepath, e)
+
+    return routes
 
 
 def setup_logging(log_cfg):
@@ -140,7 +189,6 @@ class WebhookHandler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         logger = self.server.logger
-        routes = self.server.routes
         path = self.path.split('?')[0]
 
         content_length = int(self.headers.get('Content-Length', 0))
@@ -156,7 +204,9 @@ class WebhookHandler(BaseHTTPRequestHandler):
             self._send_json(400, {'error': 'invalid JSON body'})
             return
 
-        route = find_route(routes, path, payload)
+        with self.server.routes_lock:
+            route = find_route(self.server.routes, path, payload)
+
         if route is None:
             logger.warning('no route matched: %s', path)
             self._send_json(404, {'error': 'no matching route'})
@@ -193,12 +243,50 @@ def main():
     logger = setup_logging(cfg['log'])
     logger.info('Starting webhook server')
 
+    routes_dir = cfg['routes_dir']
+    pidfile = cfg['pidfile']
+
+    with open(pidfile, 'w') as f:
+        f.write(str(os.getpid()))
+
     host = cfg['server']['host']
     port = cfg['server']['port']
 
+    routes_lock = threading.RLock()
+    initial_routes = load_all_routes(args.config, routes_dir, logger)
+
     server = ThreadingHTTPServer((host, port), WebhookHandler)
     server.logger = logger
-    server.routes = cfg['routes']
+    server.routes_lock = routes_lock
+    server.routes = initial_routes
+
+    def _reload_routes():
+        new_routes = load_all_routes(args.config, routes_dir, logger)
+        with routes_lock:
+            server.routes = new_routes
+        logger.info('routes reloaded: %d route(s)', len(new_routes))
+
+    def _on_sighup(signum, frame):
+        logger.info('SIGHUP received, reloading routes')
+        _reload_routes()
+
+    signal.signal(signal.SIGHUP, _on_sighup)
+
+    reload_flag = os.path.join(routes_dir, '.reload')
+
+    def _watch_reload():
+        while True:
+            time.sleep(2)
+            if os.path.exists(reload_flag):
+                try:
+                    os.remove(reload_flag)
+                except OSError:
+                    pass
+                logger.info('.reload flag detected, reloading routes')
+                _reload_routes()
+
+    watcher = threading.Thread(target=_watch_reload, daemon=True)
+    watcher.start()
 
     def _shutdown(signum, frame):
         logger.info('SIGTERM received, shutting down')
@@ -206,13 +294,17 @@ def main():
 
     signal.signal(signal.SIGTERM, _shutdown)
 
-    logger.info('Listening on %s:%d with %d route(s)', host, port, len(cfg['routes']))
+    logger.info('Listening on %s:%d with %d route(s)', host, port, len(initial_routes))
     try:
         server.serve_forever()
     except KeyboardInterrupt:
         logger.info('KeyboardInterrupt, shutting down')
     finally:
         server.server_close()
+        try:
+            os.remove(pidfile)
+        except OSError:
+            pass
         logger.info('Server stopped')
 
 

@@ -8,6 +8,8 @@ log:
   max_bytes: 10485760
   backup_count: 5
 
+routes_dir: /home/rocky/webhook/routes.d
+
 routes: []
 # Example route:
 #
