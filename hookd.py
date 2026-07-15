@@ -14,6 +14,7 @@ import hmac
 import json
 import logging
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -22,6 +23,9 @@ import time
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from logging.handlers import RotatingFileHandler
+
+MAX_BODY_BYTES = 1 * 1024 * 1024  # 1 MB
+_NON_POSIX_RE = re.compile(r'[^A-Z0-9_]')
 
 import yaml
 
@@ -278,7 +282,7 @@ def find_route(routes, path, payload):
 def build_webhook_env(route, payload, body_bytes, path):
     env = os.environ.copy()
     for key, val in payload.items():
-        env_key = 'WEBHOOK_PAYLOAD_' + key.upper().replace('-', '_')
+        env_key = 'WEBHOOK_PAYLOAD_' + _NON_POSIX_RE.sub('_', key.upper())
         env[env_key] = val if isinstance(val, str) else json.dumps(val)
     env['WEBHOOK_BODY'] = body_bytes.decode('utf-8', errors='replace')
     env['WEBHOOK_PATH'] = path
@@ -350,7 +354,14 @@ class HookHandler(BaseHTTPRequestHandler):
         logger = self.server.logger
         path = self.path.split('?')[0]
 
-        content_length = int(self.headers.get('Content-Length', 0))
+        try:
+            content_length = int(self.headers.get('Content-Length', 0))
+        except (ValueError, TypeError):
+            self._send_json(400, {'error': 'invalid Content-Length'})
+            return
+        if not (0 <= content_length <= MAX_BODY_BYTES):
+            self._send_json(413, {'error': 'payload too large'})
+            return
         body_bytes = self.rfile.read(content_length) if content_length else b''
 
         logger.info('POST %s from %s', path, self.client_address[0])
