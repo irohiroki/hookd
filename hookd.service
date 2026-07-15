@@ -1,6 +1,6 @@
 [Unit]
-Description=Webhook receiver server
-Documentation=file:///home/rocky/webhook/DAEMON.md
+Description=hookd — webhook and schedule dispatcher
+Documentation=file:///home/rocky/hookd/DAEMON.md
 After=network-online.target
 Wants=network-online.target
 StartLimitIntervalSec=60
@@ -10,17 +10,17 @@ StartLimitBurst=5
 Type=simple
 User=rocky
 Group=rocky
-WorkingDirectory=/home/rocky/webhook
-ExecStart=/usr/bin/python3 /home/rocky/webhook/webhook.py \
-    --config /home/rocky/webhook/config.yml
+WorkingDirectory=/home/rocky/hookd
+ExecStart=/usr/bin/python3 /home/rocky/hookd/hookd.py \
+    --config /home/rocky/hookd/config.yml
 Restart=on-failure
 RestartSec=5
 StandardOutput=journal
 StandardError=journal
-SyslogIdentifier=webhook
+SyslogIdentifier=hookd
 NoNewPrivileges=yes
 ProtectSystem=strict
-ReadWritePaths=/home/rocky/webhook
+ReadWritePaths=/home/rocky/hookd
 
 [Install]
 WantedBy=multi-user.target

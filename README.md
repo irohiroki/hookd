@@ -1,39 +1,56 @@
-# webhook
+# hookd
 
-An HTTP webhook receiver that dispatches shell scripts based on request path and
-JSON payload conditions, inspired by GitHub Actions workflow triggers.
+A webhook receiver and cron schedule dispatcher that runs shell scripts based
+on HTTP request paths, JSON payload conditions, and time-based schedules —
+inspired by GitHub Actions workflow triggers.
 
-When a `POST` request arrives, the server looks for a matching route in
-`config.yml`. If found, it verifies the optional HMAC-SHA256 signature, checks
-any payload conditions, then executes the registered script with the payload
-fields exposed as environment variables.
+Two trigger types are supported:
+
+- **Webhook**: a `POST` request to a registered path dispatches a script,
+  optionally filtered by payload conditions and verified by HMAC-SHA256 signature.
+- **Schedule**: a cron expression triggers a script at the configured time,
+  analogous to GitHub Actions `on: schedule`.
 
 ## Requirements
 
 - Python 3.9 or later
 - `python3-pyyaml` (installed by default on Rocky Linux 9)
-- A writable directory for logs (default: the directory containing `webhook.py`)
+- A writable directory for logs (default: the directory containing `hookd.py`)
 
 No additional packages need to be installed via pip.
 
 ## Installation
 
 ```bash
-mkdir -p /home/rocky/webhook /home/rocky/scripts
-cp webhook.py config.yml /home/rocky/webhook/
+mkdir -p /home/rocky/hookd /home/rocky/scripts
+cp hookd.py config.yml /home/rocky/hookd/
 ```
 
 To run the server in the foreground:
 
 ```bash
-python3 /home/rocky/webhook/webhook.py --config /home/rocky/webhook/config.yml
+python3 /home/rocky/hookd/hookd.py --config /home/rocky/hookd/config.yml
 ```
 
 To run it as a persistent systemd service, follow [DAEMON.md](DAEMON.md).
 
+## Registering routes and schedules
+
+Each user registers their own configuration with `hookctl`:
+
+```bash
+hookctl my-config.yml
+# registered 1 route(s) and 1 schedule(s) for alice — hookd will reload within 2 seconds
+```
+
+Routes and schedules from `my-config.yml` are automatically namespaced under the
+current Unix username. A user named `alice` with `path: /deploy/app` will have
+that route served at `/alice/deploy/app`.
+
 ## Configuration
 
-Edit `config.yml` to define the listening address and routes.
+Edit `config.yml` to define the listening address and admin-level routes and
+schedules. Users register their own entries via `hookctl` (see above).
 
 ```yaml
 server:
@@ -41,34 +58,47 @@ server:
   port: 9000
 
 log:
-  file: /home/rocky/webhook/webhook.log
+  file: /home/rocky/hookd/hookd.log
   level: INFO       # DEBUG | INFO | WARNING | ERROR
   max_bytes: 10485760
   backup_count: 5
 
-routes:
-  - path: /deploy/my-app
-    secret: ""                       # omit or leave empty to skip verification
-    script: /home/rocky/scripts/deploy.sh
-    async: true                      # true: respond immediately, run script in background
-    timeout: 60                      # seconds; ignored when async is true
-    match:                           # all conditions must match; omit to match any payload
-      ref: "refs/heads/main"
-    env:                             # extra environment variables forwarded to the script
-      APP_ENV: production
+routes_dir: /home/rocky/hookd/routes.d
+
+routes: []
+
+schedules: []
 ```
 
-A route matches a request when:
-1. `path` equals the request path exactly.
-2. Every key-value pair under `match` is present in the JSON body with the given value.
+### User config file format
 
-Routes are evaluated top to bottom; the first match wins.
+```yaml
+routes:
+  - path: /deploy/my-app        # served at /<username>/deploy/my-app
+    script: /home/alice/deploy.sh
+    async: true                  # default: false
+    timeout: 60                  # seconds; default: 30; ignored when async: true
+    match:                       # all conditions must match; omit to accept any payload
+      ref: "refs/heads/main"
+    env:
+      APP_ENV: production
+
+schedules:
+  - name: weekly-report         # internal ID: <username>/weekly-report
+    cron: '0 9 * * 1'           # Monday at 09:00 UTC
+    script: /home/alice/weekly.sh
+    timeout: 120                 # default: 30
+    env:
+      REPORT_TYPE: weekly
+```
+
+Forbidden keys in user files: `server`, `log`.
 
 ### Route fields
 
 | Field | Required | Description |
 |---|---|---|
-| `path` | yes | Request path to match (e.g. `/deploy/my-app`) |
+| `path` | yes | Request path; served as `/<username><path>` |
 | `script` | yes | Absolute path to the script to execute |
 | `secret` | no | Shared passphrase for HMAC-SHA256 signature verification |
 | `async` | no | `true` to fire and forget; default `false` |
@@ -76,42 +106,49 @@ Routes are evaluated top to bottom; the first match wins.
 | `match` | no | Key-value conditions on the JSON body |
 | `env` | no | Extra environment variables passed to the script |
 
+### Schedule fields
+
+| Field | Required | Description |
+|---|---|---|
+| `name` | yes | Unique identifier within the user's config |
+| `cron` | yes | 5-field cron expression (minute hour dom month dow) |
+| `script` | yes | Absolute path to the script to execute |
+| `timeout` | no | Execution timeout in seconds; default `30` |
+| `env` | no | Extra environment variables passed to the script |
+
+**Cron syntax** supports: `*`, numbers, ranges (`1-5`), steps (`*/15`, `0-30/5`),
+and comma-separated lists (`1,3,5`). Day-of-week: `0` and `7` both mean Sunday.
+
 ## Environment variables passed to scripts
 
-For each top-level field in the JSON body, the server sets a corresponding
-variable named `WEBHOOK_PAYLOAD_<KEY>` (uppercased). The following variables
-are always set:
+### Webhook triggers
 
 | Variable | Value |
 |---|---|
 | `WEBHOOK_PATH` | Request path |
 | `WEBHOOK_METHOD` | `POST` |
 | `WEBHOOK_BODY` | Raw request body as a string |
-| `WEBHOOK_PAYLOAD_<KEY>` | Each top-level JSON field |
+| `WEBHOOK_PAYLOAD_<KEY>` | Each top-level JSON field (uppercased) |
 
-Example — a body of `{"ref": "refs/heads/main", "pusher": "alice"}` produces:
+### Schedule triggers
 
-```
-WEBHOOK_PATH=/deploy/my-app
-WEBHOOK_METHOD=POST
-WEBHOOK_BODY={"ref": "refs/heads/main", "pusher": "alice"}
-WEBHOOK_PAYLOAD_REF=refs/heads/main
-WEBHOOK_PAYLOAD_PUSHER=alice
-```
+| Variable | Value |
+|---|---|
+| `SCHEDULE_NAME` | Full schedule name, e.g. `alice/weekly-report` |
+| `SCHEDULE_CRON` | The cron expression |
+| `SCHEDULE_TRIGGERED_AT` | ISO 8601 timestamp of the trigger time |
 
 ## Signature verification
 
-Set `secret` on a route to enable HMAC-SHA256 verification. The server checks
-the `X-Hub-Signature-256` request header using the same algorithm as GitHub
-webhooks. Requests without a valid signature receive `401 Unauthorized`.
+Set `secret` on a route to enable HMAC-SHA256 verification. hookd checks the
+`X-Hub-Signature-256` request header using the same algorithm as GitHub webhooks.
+Requests without a valid signature receive `401 Unauthorized`.
 
 The expected header format is:
 
 ```
 X-Hub-Signature-256: sha256=<hex digest>
 ```
-
-where the digest is computed as `HMAC-SHA256(secret, raw_body_bytes)`.
 
 ## HTTP responses
 
@@ -132,7 +169,7 @@ From within the server host (no firewall rule needed):
 import urllib.request, json
 
 req = urllib.request.Request(
-    "http://127.0.0.1:9000/deploy/my-app",
+    "http://127.0.0.1:9000/alice/deploy/my-app",
     data=json.dumps({"ref": "refs/heads/main"}).encode(),
     headers={"Content-Type": "application/json"},
 )
@@ -144,5 +181,5 @@ Logs are written to the file configured under `log.file` and also to the
 systemd journal when running as a service:
 
 ```bash
-sudo journalctl -u webhook -f
+sudo journalctl -u hookd -f
 ```

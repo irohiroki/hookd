@@ -1,0 +1,5 @@
+schedules:
+  - name: test-hookd-schedule
+    cron: '* * * * *'
+    script: /home/rocky/hookd/tests/scripts/echo-schedule.sh
+    timeout: 10

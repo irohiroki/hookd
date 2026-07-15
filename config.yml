@@ -3,18 +3,18 @@ server:
   port: 9000
 
 log:
-  file: /home/rocky/webhook/webhook.log
+  file: /home/rocky/hookd/hookd.log
   level: INFO
   max_bytes: 10485760
   backup_count: 5
 
-routes_dir: /home/rocky/webhook/routes.d
+routes_dir: /home/rocky/hookd/routes.d
 
 routes: []
 # Example route:
 #
 #  - path: /deploy/my-app
-#    secret: ""                      # shared passphrase for HMAC-SHA256 verification; omit to skip
+#    secret: ""                      # shared passphrase for signature verification; omit to skip
 #    script: /home/rocky/scripts/deploy.sh
 #    async: true                     # true = fire-and-forget (always responds 202); default: false
 #    timeout: 60                     # seconds; ignored when async: true; default: 30
@@ -22,3 +22,13 @@ routes: []
 #      ref: "refs/heads/main"
 #    env:                            # extra env vars forwarded to the script
 #      APP_ENV: production
+
+schedules: []
+# Example schedule:
+#
+#  - name: daily-cleanup
+#    cron: '0 3 * * *'              # daily at 03:00 UTC
+#    script: /home/rocky/scripts/cleanup.sh
+#    timeout: 120                   # default: 30
+#    env:
+#      TARGET_DIR: /var/log/app

@@ -1,0 +1,3 @@
+#!/bin/bash
+echo "WEBHOOK_PATH=$WEBHOOK_PATH"
+echo "WEBHOOK_BODY=$WEBHOOK_BODY"

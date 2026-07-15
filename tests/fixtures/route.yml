@@ -1,0 +1,5 @@
+routes:
+  - path: /test-hookd
+    script: /home/rocky/hookd/tests/scripts/echo-webhook.sh
+    async: false
+    timeout: 10
