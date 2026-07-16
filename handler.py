@@ -43,6 +43,12 @@ class HookHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def do_GET(self):
+        if self.path.split('?')[0] == '/up':
+            self._send_json(200, {'status': 'ok'})
+        else:
+            self._send_json(404, {'error': 'not found'})
+
     def do_POST(self):
         logger = self.server.logger
         path = self.path.split('?')[0]
