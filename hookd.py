@@ -94,13 +94,15 @@ def main():
     reload_flag = os.path.join(routes_dir, '.reload')
 
     def _watch_reload():
+        last_mtime = 0
         while True:
             time.sleep(2)
-            if os.path.exists(reload_flag):
-                try:
-                    os.remove(reload_flag)
-                except OSError:
-                    pass
+            try:
+                mtime = os.path.getmtime(reload_flag)
+            except OSError:
+                mtime = 0
+            if mtime > last_mtime:
+                last_mtime = mtime
                 logger.info('.reload flag detected, reloading')
                 _reload()
 

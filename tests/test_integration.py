@@ -17,12 +17,14 @@ import os
 import pwd
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.request
 
+import yaml
+
 HERE = os.path.dirname(os.path.abspath(__file__))
-FIXTURES = os.path.join(HERE, 'fixtures')
 SCRIPTS = os.path.join(HERE, 'scripts')
 BASE_URL = 'http://127.0.0.1:9000'
 _PW = pwd.getpwuid(os.getuid())
@@ -48,17 +50,24 @@ def post(path, payload):
         return e.code, json.loads(e.read())
 
 
-def hookctl(fixture_name):
-    path = os.path.join(FIXTURES, fixture_name)
-    result = subprocess.run(['hookctl', path], capture_output=True, text=True)
-    if result.returncode != 0:
-        fail(f'hookctl {fixture_name} failed: {result.stderr.strip()}')
-    print(f'      hookctl: {result.stdout.strip()}')
+def hookctl(cfg):
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.yml', delete=False) as f:
+        yaml.safe_dump(cfg, f)
+        tmp = f.name
+    try:
+        result = subprocess.run(['hookctl', tmp], capture_output=True, text=True)
+        if result.returncode != 0:
+            fail(f'hookctl failed: {result.stderr.strip()}')
+        print(f'      hookctl: {result.stdout.strip()}')
+    finally:
+        os.unlink(tmp)
 
 
 def test_webhook():
     print('--- webhook test ---')
-    hookctl('route.yml')
+    hookctl({'routes': [{'path': '/test-hookd',
+                         'script': os.path.join(SCRIPTS, 'echo-webhook.sh'),
+                         'async': False, 'timeout': 10}]})
     time.sleep(2)
 
     route_path = f'/{USERNAME}/test-hookd'
@@ -72,7 +81,9 @@ def test_webhook():
 
 def test_user_switch():
     print('--- user switch test ---')
-    hookctl('owner-check.yml')
+    hookctl({'routes': [{'path': '/owner-check',
+                         'script': os.path.join(SCRIPTS, 'echo-owner.sh'),
+                         'async': False, 'timeout': 10}]})
     time.sleep(2)
 
     if os.path.exists(OWNER_CHECK_FILE):
@@ -100,7 +111,9 @@ def test_user_switch():
 
 def test_schedule(timeout=90):
     print('--- schedule test ---')
-    hookctl('schedule.yml')
+    hookctl({'schedules': [{'name': 'test-hookd-schedule', 'cron': '* * * * *',
+                             'script': os.path.join(SCRIPTS, 'echo-schedule.sh'),
+                             'timeout': 10}]})
 
     import subprocess as sp
     deadline = time.time() + timeout
