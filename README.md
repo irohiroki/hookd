@@ -21,18 +21,22 @@ No additional packages need to be installed via pip.
 
 ## Installation
 
-```bash
-mkdir -p /home/rocky/hookd /home/rocky/scripts
-cp hookd.py config.yml /home/rocky/hookd/
-```
-
-To run the server in the foreground:
+Run `install.sh` as root on the target host:
 
 ```bash
-python3 /home/rocky/hookd/hookd.py --config /home/rocky/hookd/config.yml
+HOOKD_USER=<user> bash <(curl -fsSL https://raw.githubusercontent.com/irohiroki/hookd/main/install.sh)
 ```
 
-To run it as a persistent systemd service, follow [DAEMON.md](DAEMON.md).
+Replace `<user>` with the Linux account hookd will run as. The script
+downloads the Python modules, generates `config.yml`, installs `hookctl` and
+the systemd service, and starts hookd. For environment variable options and
+split admin / service user setups, see [DEPLOY.md](DEPLOY.md).
+
+To start hookd in the foreground for local testing:
+
+```bash
+python3 hookd.py --config config.yml
+```
 
 ## Registering routes and schedules
 
@@ -58,12 +62,12 @@ server:
   port: 9000
 
 log:
-  file: /home/rocky/hookd/hookd.log
+  file: /home/<user>/hookd/hookd.log
   level: INFO       # DEBUG | INFO | WARNING | ERROR
   max_bytes: 10485760
   backup_count: 5
 
-routes_dir: /home/rocky/hookd/routes.d
+routes_dir: /var/lib/hookd/routes.d
 
 routes: []
 
