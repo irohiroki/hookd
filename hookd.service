@@ -1,6 +1,6 @@
 [Unit]
 Description=hookd — webhook and schedule dispatcher
-Documentation=file:///home/rocky/hookd/DAEMON.md
+Documentation=file:///home/rocky/hookd/DEPLOY.md
 After=network-online.target
 Wants=network-online.target
 StartLimitIntervalSec=60
@@ -20,7 +20,7 @@ StandardError=journal
 SyslogIdentifier=hookd
 NoNewPrivileges=yes
 ProtectSystem=strict
-ReadWritePaths=/home/rocky/hookd
+ReadWritePaths=/home/rocky/hookd /tmp
 AmbientCapabilities=CAP_SETUID CAP_SETGID
 CapabilityBoundingSet=CAP_SETUID CAP_SETGID
 
