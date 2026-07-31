@@ -165,25 +165,52 @@ X-Hub-Signature-256: sha256=<hex digest>
 | `404 Not Found` | No route matched the request path and payload |
 | `500 Internal Server Error` | Script exited with a non-zero status |
 
-## Testing a route
+## Testing and debugging
 
-From within the server host (no firewall rule needed):
+### Sync routes
 
-```python
-import urllib.request, json
-
-req = urllib.request.Request(
-    "http://127.0.0.1:9000/alice/deploy/my-app",
-    data=json.dumps({"ref": "refs/heads/main"}).encode(),
-    headers={"Content-Type": "application/json"},
-)
-r = urllib.request.urlopen(req)
-print(r.status, r.read().decode())
-```
-
-Logs are written to the file configured under `log.file` and also to the
-systemd journal when running as a service:
+For routes with `async: false`, hookd captures stdout and stderr and returns
+them in the response body. Test from within the server host:
 
 ```bash
-sudo journalctl -u hookd -f
+curl -s -X POST http://127.0.0.1:9000/alice/deploy/my-app \
+  -H 'Content-Type: application/json' \
+  -d '{"ref":"refs/heads/main"}' | python3 -m json.tool
 ```
+
+A successful response looks like:
+
+```json
+{"status": "ok", "exit_code": 0}
+```
+
+A failure response includes the captured output:
+
+```json
+{"status": "error", "exit_code": 1, "output": "..."}
+```
+
+### Async routes and schedules
+
+There is no response body to inspect. Add a redirect at the top of your script
+to capture all output to a file:
+
+```bash
+#!/bin/bash
+exec >> ~/hookd/myscript.log 2>&1
+set -x
+```
+
+### Testing a script without hookd
+
+Simulate the environment variables hookd injects and run the script directly:
+
+```bash
+WEBHOOK_PATH=/alice/deploy/my-app WEBHOOK_METHOD=POST \
+  WEBHOOK_BODY='{"ref":"refs/heads/main"}' \
+  WEBHOOK_PAYLOAD_REF=refs/heads/main \
+  bash ~/scripts/deploy.sh
+```
+
+For schedule scripts, use `SCHEDULE_NAME`, `SCHEDULE_CRON`, and
+`SCHEDULE_TRIGGERED_AT` instead.

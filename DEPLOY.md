@@ -137,6 +137,5 @@ Ensure the script exists and is executable:
 
 ```bash
 ls -l /path/to/script.sh
-python3 -c "import os, stat; os.chmod('/path/to/script.sh', stat.S_IRWXU | stat.S_IRGRP | stat.S_IXGRP | stat.S_IROTH | stat.S_IXOTH)"
+chmod 755 /path/to/script.sh
 ```
-
