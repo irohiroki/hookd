@@ -139,3 +139,50 @@ Ensure the script exists and is executable:
 ls -l /path/to/script.sh
 chmod 755 /path/to/script.sh
 ```
+
+## Bedrock credential proxy
+
+`bedrock-proxy` is a companion daemon that holds `AWS_BEARER_TOKEN_BEDROCK`
+and proxies requests from user scripts to the AWS Bedrock OpenAI-compatible
+endpoint. The token is never exposed to user scripts.
+
+### Install
+
+Run `install-proxy.sh` as root:
+
+```bash
+BEDROCK_TOKEN=<token> bash <(curl -fsSL https://raw.githubusercontent.com/irohiroki/hookd/main/install-proxy.sh)
+```
+
+`BEDROCK_BASE_URL` defaults to `https://bedrock.us-east-1.amazonaws.com/v1`.
+Set it before the command to override.
+
+### Expose the socket to user scripts
+
+Add to the `[Service]` section of `/etc/systemd/system/hookd.service`:
+
+```ini
+Environment=BEDROCK_PROXY_SOCK=/run/bedrock-proxy/proxy.sock
+```
+
+Then reload and restart hookd:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl restart hookd
+```
+
+### Management
+
+```bash
+sudo systemctl stop bedrock-proxy
+sudo systemctl restart bedrock-proxy
+sudo journalctl -u bedrock-proxy -f
+```
+
+### What install-proxy.sh does
+
+1. Creates the `bedrock-proxy` system account
+2. Writes the token to `/etc/bedrock-proxy/env` (mode 400, root-owned)
+3. Installs `bedrock-proxy.py` to `/opt/bedrock-proxy/`
+4. Installs and starts `bedrock-proxy.service`

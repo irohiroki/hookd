@@ -214,3 +214,33 @@ WEBHOOK_PATH=/alice/deploy/my-app WEBHOOK_METHOD=POST \
 
 For schedule scripts, use `SCHEDULE_NAME`, `SCHEDULE_CRON`, and
 `SCHEDULE_TRIGGERED_AT` instead.
+
+## Using Bedrock from scripts
+
+When `bedrock-proxy` is running and the admin has added `BEDROCK_PROXY_SOCK`
+to the hookd service environment, that variable is available to every script
+hookd runs. See [DEPLOY.md](DEPLOY.md) for the setup steps.
+
+Install the required libraries once:
+
+```bash
+pip install --user openai httpx
+```
+
+Connect to Bedrock through the proxy socket:
+
+```python
+import httpx, os
+from openai import OpenAI
+
+client = OpenAI(
+    base_url="http://localhost/v1",
+    http_client=httpx.Client(
+        transport=httpx.HTTPTransport(uds=os.environ["BEDROCK_PROXY_SOCK"])
+    ),
+    api_key="unused",
+)
+```
+
+`AWS_BEARER_TOKEN_BEDROCK` is never accessible to user scripts; only the
+`bedrock-proxy` daemon holds it.

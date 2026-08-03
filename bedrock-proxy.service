@@ -1,0 +1,25 @@
+[Unit]
+Description=Bedrock credential proxy
+After=network.target
+
+[Service]
+Type=simple
+User=bedrock-proxy
+Group=bedrock-proxy
+RuntimeDirectory=bedrock-proxy
+RuntimeDirectoryMode=0755
+EnvironmentFile=/etc/bedrock-proxy/env
+ExecStart=python3 /opt/bedrock-proxy/bedrock-proxy.py
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+NoNewPrivileges=yes
+ProtectSystem=strict
+PrivateTmp=yes
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Install]
+WantedBy=multi-user.target
