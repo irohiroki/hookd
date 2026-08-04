@@ -214,3 +214,20 @@ WEBHOOK_PATH=/alice/deploy/my-app WEBHOOK_METHOD=POST \
 
 For schedule scripts, use `SCHEDULE_NAME`, `SCHEDULE_CRON`, and
 `SCHEDULE_TRIGGERED_AT` instead.
+
+## Calling Claude from scripts
+
+When `bedrock-proxy` is installed and hookd is configured to use it, scripts
+can call the `claude` binary directly with no additional setup:
+
+```bash
+result=$(git -C ~/my-app log -20 --format='%s' | claude -p "Summarize these commit messages into release notes")
+echo "$result"
+```
+
+hookd injects the necessary proxy environment variables automatically.
+`AWS_BEARER_TOKEN_BEDROCK` in the script environment is a dummy value;
+the real token is held only by the `bedrock-proxy` daemon and is never
+accessible to user scripts.
+
+See [DEPLOY.md](DEPLOY.md) for the admin setup steps.
