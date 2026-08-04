@@ -143,8 +143,28 @@ chmod 755 /path/to/script.sh
 ## Bedrock credential proxy
 
 `bedrock-proxy` is a companion daemon that holds `AWS_BEARER_TOKEN_BEDROCK`
-and proxies requests from user scripts to the AWS Bedrock OpenAI-compatible
-endpoint. The token is never exposed to user scripts.
+and intercepts HTTPS traffic from the `claude` binary to the Bedrock endpoint
+via a local HTTPS MITM proxy. User scripts call `claude -p prompt` as usual;
+no code changes are required. The real token is never in user script environments.
+
+### How it works
+
+hookd injects three environment variables into every user script:
+
+| Variable | Value |
+|---|---|
+| `AWS_BEARER_TOKEN_BEDROCK` | `dummy` (any non-empty string) |
+| `HTTPS_PROXY` | `http://127.0.0.1:8888` |
+| `NODE_EXTRA_CA_CERTS` | `/etc/bedrock-proxy/ca.crt` |
+
+When `claude` makes a request to Bedrock, it routes through the proxy. The
+proxy intercepts the TLS session using a certificate signed by a local CA
+(trusted via `NODE_EXTRA_CA_CERTS`). The certificate covers `*.amazonaws.com`
+and `*.<region>.amazonaws.com` (e.g. `*.us-east-1.amazonaws.com`), which is
+required because the actual Bedrock runtime endpoint is
+`bedrock-runtime.<region>.amazonaws.com` — a two-level subdomain not covered
+by `*.amazonaws.com` alone. The region is derived from `BEDROCK_BASE_URL` at
+cert generation time.
 
 ### Install
 
@@ -155,14 +175,18 @@ BEDROCK_TOKEN=<token> bash <(curl -fsSL https://raw.githubusercontent.com/irohir
 ```
 
 `BEDROCK_BASE_URL` defaults to `https://bedrock.us-east-1.amazonaws.com/v1`.
-Set it before the command to override.
+`BEDROCK_PROXY_PORT` defaults to `8888`. Set either before the command to override.
 
-### Expose the socket to user scripts
+The script prints the three environment variable lines to add to hookd.service.
+
+### Hook into hookd
 
 Add to the `[Service]` section of `/etc/systemd/system/hookd.service`:
 
 ```ini
-Environment=BEDROCK_PROXY_SOCK=/run/bedrock-proxy/proxy.sock
+Environment=AWS_BEARER_TOKEN_BEDROCK=dummy
+Environment=HTTPS_PROXY=http://127.0.0.1:8888
+Environment=NODE_EXTRA_CA_CERTS=/etc/bedrock-proxy/ca.crt
 ```
 
 Then reload and restart hookd:
@@ -180,9 +204,16 @@ sudo systemctl restart bedrock-proxy
 sudo journalctl -u bedrock-proxy -f
 ```
 
+Health check:
+
+```bash
+curl -s http://127.0.0.1:8888/up
+```
+
 ### What install-proxy.sh does
 
 1. Creates the `bedrock-proxy` system account
 2. Writes the token to `/etc/bedrock-proxy/env` (mode 400, root-owned)
-3. Installs `bedrock-proxy.py` to `/opt/bedrock-proxy/`
-4. Installs and starts `bedrock-proxy.service`
+3. Installs `bedrock-proxy.py` and `generate_certs.py` to `/opt/bedrock-proxy/`
+4. Generates a local CA and a wildcard `*.amazonaws.com` certificate via `generate_certs.py`
+5. Installs and starts `bedrock-proxy.service`

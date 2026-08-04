@@ -1,13 +1,11 @@
 [Unit]
-Description=Bedrock credential proxy
+Description=Bedrock credential proxy (HTTPS MITM)
 After=network.target
 
 [Service]
 Type=simple
 User=bedrock-proxy
 Group=bedrock-proxy
-RuntimeDirectory=bedrock-proxy
-RuntimeDirectoryMode=0755
 EnvironmentFile=/etc/bedrock-proxy/env
 ExecStart=python3 /opt/bedrock-proxy/bedrock-proxy.py
 ExecReload=/bin/kill -HUP $MAINPID
