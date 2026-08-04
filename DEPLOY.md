@@ -156,6 +156,7 @@ hookd injects three environment variables into every user script:
 | `AWS_BEARER_TOKEN_BEDROCK` | `dummy` (any non-empty string) |
 | `HTTPS_PROXY` | `http://127.0.0.1:8888` |
 | `NODE_EXTRA_CA_CERTS` | `/etc/bedrock-proxy/ca.crt` |
+| `AWS_DEFAULT_REGION` | AWS region, e.g. `ap-northeast-1` |
 
 When `claude` makes a request to Bedrock, it routes through the proxy. The
 proxy intercepts the TLS session using a certificate signed by a local CA
@@ -174,8 +175,13 @@ Run `install-proxy.sh` as root:
 BEDROCK_TOKEN=<token> bash <(curl -fsSL https://raw.githubusercontent.com/irohiroki/hookd/main/install-proxy.sh)
 ```
 
-`BEDROCK_BASE_URL` defaults to `https://bedrock.us-east-1.amazonaws.com/v1`.
-`BEDROCK_PROXY_PORT` defaults to `8888`. Set either before the command to override.
+`BEDROCK_REGION` defaults to `ap-northeast-1`. Set it to override the region:
+
+```bash
+BEDROCK_TOKEN=<token> BEDROCK_REGION=us-east-1 bash <(curl -fsSL ...)
+```
+
+`BEDROCK_BASE_URL` and `BEDROCK_PROXY_PORT` can also be set explicitly to bypass the defaults.
 
 The script prints the three environment variable lines to add to hookd.service.
 
@@ -187,6 +193,7 @@ Add to the `[Service]` section of `/etc/systemd/system/hookd.service`:
 Environment=AWS_BEARER_TOKEN_BEDROCK=dummy
 Environment=HTTPS_PROXY=http://127.0.0.1:8888
 Environment=NODE_EXTRA_CA_CERTS=/etc/bedrock-proxy/ca.crt
+Environment=AWS_DEFAULT_REGION=ap-northeast-1
 ```
 
 Then reload and restart hookd:

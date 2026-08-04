@@ -17,7 +17,8 @@ if [ -z "${BEDROCK_TOKEN:-}" ]; then
 fi
 [ -n "$BEDROCK_TOKEN" ] || die "token is required"
 
-BEDROCK_BASE_URL="${BEDROCK_BASE_URL:-https://bedrock.us-east-1.amazonaws.com/v1}"
+BEDROCK_REGION="${BEDROCK_REGION:-ap-northeast-1}"
+BEDROCK_BASE_URL="${BEDROCK_BASE_URL:-https://bedrock.${BEDROCK_REGION}.amazonaws.com/v1}"
 
 # System user
 if ! id -u bedrock-proxy &>/dev/null; then
@@ -30,6 +31,7 @@ mkdir -p "$INSTALL_DIR" "$CONFIG_DIR"
 # Token file (root-owned, unreadable by service user — systemd reads it before drop)
 cat > "$CONFIG_DIR/env" <<EOF
 AWS_BEARER_TOKEN_BEDROCK=$BEDROCK_TOKEN
+BEDROCK_REGION=$BEDROCK_REGION
 BEDROCK_BASE_URL=$BEDROCK_BASE_URL
 BEDROCK_PROXY_PORT=$PROXY_PORT
 EOF
@@ -61,5 +63,6 @@ echo "Add to /etc/systemd/system/hookd.service [Service]:"
 echo "  Environment=AWS_BEARER_TOKEN_BEDROCK=dummy"
 echo "  Environment=HTTPS_PROXY=http://127.0.0.1:$PROXY_PORT"
 echo "  Environment=NODE_EXTRA_CA_CERTS=$CONFIG_DIR/ca.crt"
+echo "  Environment=AWS_DEFAULT_REGION=$BEDROCK_REGION"
 echo
 echo "Then: systemctl daemon-reload && systemctl restart hookd"

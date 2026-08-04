@@ -24,7 +24,7 @@ except ImportError:
 
 CONFIG_DIR = os.environ.get("BEDROCK_PROXY_CONFIG_DIR", "/etc/bedrock-proxy")
 PROXY_PORT = os.environ.get("BEDROCK_PROXY_PORT", "8888")
-BEDROCK_BASE_URL = os.environ.get("BEDROCK_BASE_URL", "https://bedrock.us-east-1.amazonaws.com/v1")
+BEDROCK_BASE_URL = os.environ.get("BEDROCK_BASE_URL", "https://bedrock.ap-northeast-1.amazonaws.com/v1")
 
 
 def _region_from_url(url):
