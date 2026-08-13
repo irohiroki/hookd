@@ -69,6 +69,8 @@ log:
 
 routes_dir: /var/lib/hookd/routes.d
 
+env_groups: {}    # named env var sets jobs opt into with `env_group:` (admin-only)
+
 routes: []
 
 schedules: []
@@ -96,7 +98,8 @@ schedules:
       REPORT_TYPE: weekly
 ```
 
-Forbidden keys in user files: `server`, `log`.
+Forbidden keys in user files: `server`, `log`, `env_groups`. Routes and
+schedules may *reference* admin-defined env groups with `env_group: <name>`.
 
 ### Route fields
 
@@ -108,6 +111,7 @@ Forbidden keys in user files: `server`, `log`.
 | `async` | no | `true` to fire and forget; default `false` |
 | `timeout` | no | Execution timeout in seconds; default `30` |
 | `match` | no | Key-value conditions on the JSON body |
+| `env_group` | no | Admin-defined env group name (or list of names) to opt into |
 | `env` | no | Extra environment variables passed to the script |
 
 ### Schedule fields
@@ -118,6 +122,7 @@ Forbidden keys in user files: `server`, `log`.
 | `cron` | yes | 5-field cron expression (minute hour dom month dow) |
 | `script` | yes | Absolute path to the script to execute |
 | `timeout` | no | Execution timeout in seconds; default `30` |
+| `env_group` | no | Admin-defined env group name (or list of names) to opt into |
 | `env` | no | Extra environment variables passed to the script |
 
 **Cron syntax** supports: `*`, numbers, ranges (`1-5`), steps (`*/15`, `0-30/5`),
@@ -141,6 +146,13 @@ and comma-separated lists (`1,3,5`). Day-of-week: `0` and `7` both mean Sunday.
 | `SCHEDULE_NAME` | Full schedule name, e.g. `alice/weekly-report` |
 | `SCHEDULE_CRON` | The cron expression |
 | `SCHEDULE_TRIGGERED_AT` | ISO 8601 timestamp of the trigger time |
+
+### Precedence
+
+Scripts receive, from weakest to strongest: the daemon's own environment,
+the env groups the job opted into via `env_group:`, the owner's `USER`/`HOME`,
+the built-in `WEBHOOK_*`/`SCHEDULE_*` variables, and finally the job's own
+`env:` entries.
 
 ## Signature verification
 
@@ -217,15 +229,19 @@ For schedule scripts, use `SCHEDULE_NAME`, `SCHEDULE_CRON`, and
 
 ## Calling Claude from scripts
 
-When `bedrock-proxy` is installed and hookd is configured to use it, scripts
-can call the `claude` binary directly with no additional setup:
+When `bedrock-proxy` is installed and the admin has defined the `bedrock`
+env group (see DEPLOY.md), a route or schedule opts in with
+`env_group: bedrock` and its script can call the `claude` binary directly
+with no additional setup:
 
 ```bash
 result=$(git -C ~/my-app log -20 --format='%s' | claude -p "Summarize these commit messages into release notes")
 echo "$result"
 ```
 
-hookd injects the necessary proxy environment variables automatically.
+hookd injects the necessary proxy environment variables into opted-in jobs
+only — jobs without `env_group: bedrock` are untouched, so scripts that call
+`claude` with a personal account need no group (and must not opt in).
 `AWS_BEARER_TOKEN_BEDROCK` in the script environment is a dummy value;
 the real token is held only by the `bedrock-proxy` daemon and is never
 accessible to user scripts.

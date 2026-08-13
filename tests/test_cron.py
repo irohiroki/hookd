@@ -1,6 +1,6 @@
 """
-Unit tests for hookd.py (cron parser, env key sanitization, user switching).
-No running server is required.
+Unit tests for hookd.py (cron parser, env key sanitization, user switching,
+env groups, env builder precedence). No running server is required.
 
 Usage:
     python3 tests/test_cron.py
@@ -9,11 +9,13 @@ Usage:
 import os
 import pwd
 import sys
+import tempfile
 from datetime import datetime
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from config import load_all_routes, load_all_schedules
 from cron import cron_matches, parse_cron
-from runner import _NON_POSIX_RE
+from runner import _NON_POSIX_RE, build_schedule_env, build_webhook_env
 from user import _make_preexec, _owner_env
 
 _CURRENT_USER = pwd.getpwuid(os.getuid())
@@ -46,6 +48,41 @@ ENV_KEY_CASES = [
     ('foo\x00',   'FOO_'),
     ('',          ''),
 ]
+
+
+GROUPS_CONFIG = """\
+env_groups:
+  bedrock:
+    HTTPS_PROXY: "http://127.0.0.1:8888"
+    no_proxy: "example.com,.example.com"
+    RETRIES: 3
+  extra:
+    EXTRA_KEY: extra
+routes:
+  - path: /with-group
+    script: /bin/true
+    env_group: bedrock
+  - path: /with-list
+    script: /bin/true
+    env_group: [bedrock, extra]
+  - path: /unknown-group
+    script: /bin/true
+    env_group: nope
+  - path: /plain
+    script: /bin/true
+schedules:
+  - name: sched-group
+    cron: '* * * * *'
+    script: /bin/true
+    env_group: bedrock
+"""
+
+GROUPS_USER_CONFIG = """\
+routes:
+  - path: /user-route
+    script: /bin/true
+    env_group: bedrock
+"""
 
 
 def run():
@@ -115,6 +152,76 @@ def run():
     if not ok:
         failures.append(f'_make_preexec({username!r})')
     print(f'{status}  _make_preexec({username!r}) is callable → {ok}')
+
+    def check(ok, label):
+        status = 'OK  ' if ok else 'FAIL'
+        if not ok:
+            failures.append(label)
+        print(f'{status}  {label}')
+
+    print()
+    print('--- env groups (load) ---')
+    with tempfile.TemporaryDirectory() as tmpdir:
+        cfg_path = os.path.join(tmpdir, 'config.yml')
+        routes_dir = os.path.join(tmpdir, 'routes.d')
+        os.mkdir(routes_dir)
+        with open(cfg_path, 'w') as f:
+            f.write(GROUPS_CONFIG)
+        with open(os.path.join(routes_dir, 'alice.yml'), 'w') as f:
+            f.write(GROUPS_USER_CONFIG)
+
+        routes = {r['path']: r for r in load_all_routes(cfg_path, routes_dir)}
+        schedules = {s['name']: s for s in load_all_schedules(cfg_path, routes_dir)}
+
+        bedrock_env = {'HTTPS_PROXY': 'http://127.0.0.1:8888',
+                       'no_proxy': 'example.com,.example.com',
+                       'RETRIES': '3'}
+        check(routes['/with-group'].get('_group_env') == bedrock_env,
+              'env_group resolves; values str()-normalized; lowercase key kept')
+        check(routes['/with-list'].get('_group_env') == {**bedrock_env, 'EXTRA_KEY': 'extra'},
+              'env_group accepts a list of names, merged in order')
+        check('_group_env' not in routes['/unknown-group'],
+              'unknown group name skipped, route still loads')
+        check('_group_env' not in routes['/plain'],
+              'route without env_group is untouched')
+        check(routes['/alice/user-route'].get('_group_env') == bedrock_env,
+              'user routes (routes.d) can reference admin env groups')
+        check(schedules['sched-group'].get('_group_env') == bedrock_env,
+              'schedules resolve env_group too')
+
+    print()
+    print('--- env builders (precedence) ---')
+    group_env = {'HTTPS_PROXY': 'from-group', 'no_proxy': 'from-group',
+                 'WEBHOOK_PATH': 'spoof', 'HOOKD_TEST_OS': 'from-group',
+                 'USER': 'spoof', 'HOME': '/tmp/spoof'}
+
+    os.environ['HOOKD_TEST_OS'] = 'from-os'
+    try:
+        route = {'path': '/x', 'script': '/bin/true', '_owner': username,
+                 'env': {'HTTPS_PROXY': 'from-route'}, '_group_env': group_env}
+        env = build_webhook_env(route, {}, b'', '/real')
+    finally:
+        del os.environ['HOOKD_TEST_OS']
+
+    check(env['HOOKD_TEST_OS'] == 'from-group', 'group env overrides os.environ')
+    check(env['no_proxy'] == 'from-group', 'lowercase group key passes through unchanged')
+    check(env['HTTPS_PROXY'] == 'from-route', 'route env overrides group env')
+    check(env['WEBHOOK_PATH'] == '/real', 'built-in WEBHOOK_* overrides group env')
+    check(env['USER'] == username and env['HOME'] == _CURRENT_USER.pw_dir,
+          'owner USER/HOME override group env')
+
+    plain_route = {'path': '/x', 'script': '/bin/true', 'env': {}}
+    env = build_webhook_env(plain_route, {}, b'', '/real')
+    check(env['WEBHOOK_PATH'] == '/real', 'route without _group_env still works')
+
+    sched = {'name': 't', 'cron': '* * * * *', 'script': '/bin/true',
+             'env': {'HTTPS_PROXY': 'from-sched'},
+             '_group_env': {'HTTPS_PROXY': 'from-group', 'no_proxy': 'np',
+                            'SCHEDULE_NAME': 'spoof'}}
+    env = build_schedule_env(sched, datetime(2026, 8, 13, 9, 0))
+    check(env['HTTPS_PROXY'] == 'from-sched', 'schedule env overrides group env')
+    check(env['no_proxy'] == 'np', 'schedule group env injected')
+    check(env['SCHEDULE_NAME'] == 't', 'built-in SCHEDULE_* overrides group env')
 
     print()
     if failures:

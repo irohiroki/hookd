@@ -4,9 +4,12 @@ Two levels of tests are provided.
 
 ## Unit tests
 
-`test_cron.py` verifies the cron parser, env key sanitization, and user-switching
-helpers (`_owner_env`, `_make_preexec`) in `hookd.py`.
-No running server or EC2 access is required. Run from the repository root:
+`test_cron.py` verifies the cron parser, env key sanitization, user-switching
+helpers (`_owner_env`, `_make_preexec`), env group resolution
+(`load_all_routes` / `load_all_schedules`), and env builder precedence
+(`build_webhook_env` / `build_schedule_env`).
+No running server or EC2 access is required (PyYAML must be installed).
+Run from the repository root:
 
 ```bash
 python3 tests/test_cron.py

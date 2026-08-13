@@ -87,7 +87,14 @@ sudo systemctl is-enabled hookd
 
 ## Updating the admin config
 
-`hookd.py` reads `config.yml` once at startup. After editing, restart:
+`routes`, `schedules` and `env_groups` in `config.yml` are re-read on reload:
+
+```bash
+sudo systemctl reload hookd     # or: kill -HUP $(cat /path/to/hookd.pid)
+```
+
+`server`, `log`, `routes_dir` and `pidfile` are read once at startup and need a
+restart:
 
 ```bash
 sudo systemctl restart hookd
@@ -95,6 +102,11 @@ sudo systemctl restart hookd
 
 User-registered routes and schedules reload automatically within 2 seconds of a
 `hookctl` invocation — no restart needed.
+
+Note: re-running `install.sh` as root regenerates
+`/etc/systemd/system/hookd.service`, discarding any manual edits to the unit.
+To update only the Python modules, run `install.sh` as the service user
+(non-root) — the unit and an existing `config.yml` are left untouched.
 
 ## Log rotation
 
@@ -149,14 +161,19 @@ no code changes are required. The real token is never in user script environment
 
 ### How it works
 
-hookd injects three environment variables into every user script:
+The proxy variables are defined once as a named env group in hookd's
+`config.yml`, and each route or schedule that uses Bedrock opts in with
+`env_group: bedrock`. Jobs that do not opt in get none of these variables —
+scripts that call `claude` with a personal account keep working untouched.
 
 | Variable | Value |
 |---|---|
+| `CLAUDE_CODE_USE_BEDROCK` | `1` (tells `claude` to use Bedrock) |
 | `AWS_BEARER_TOKEN_BEDROCK` | `dummy` (any non-empty string) |
 | `HTTPS_PROXY` | `http://127.0.0.1:8888` |
 | `NODE_EXTRA_CA_CERTS` | `/etc/bedrock-proxy/ca.crt` |
 | `AWS_DEFAULT_REGION` | AWS region, e.g. `ap-northeast-1` |
+| `NO_PROXY` / `no_proxy` | every non-AWS destination, comma-separated (see [NO_PROXY maintenance](#no_proxy-maintenance)) |
 
 When `claude` makes a request to Bedrock, it routes through the proxy. The
 proxy intercepts the TLS session using a certificate signed by a local CA
@@ -183,24 +200,77 @@ BEDROCK_TOKEN=<token> BEDROCK_REGION=us-east-1 bash <(curl -fsSL ...)
 
 `BEDROCK_BASE_URL` and `BEDROCK_PROXY_PORT` can also be set explicitly to bypass the defaults.
 
-The script prints the three environment variable lines to add to hookd.service.
+The script prints the `env_groups:` block to add to hookd's `config.yml`.
 
 ### Hook into hookd
 
-Add to the `[Service]` section of `/etc/systemd/system/hookd.service`:
+Add an env group to hookd's `config.yml` (the host-specific values are printed
+by `install-proxy.sh`):
 
-```ini
-Environment=AWS_BEARER_TOKEN_BEDROCK=dummy
-Environment=HTTPS_PROXY=http://127.0.0.1:8888
-Environment=NODE_EXTRA_CA_CERTS=/etc/bedrock-proxy/ca.crt
-Environment=AWS_DEFAULT_REGION=ap-northeast-1
+```yaml
+env_groups:
+  bedrock:
+    CLAUDE_CODE_USE_BEDROCK: "1"
+    HTTPS_PROXY: "http://127.0.0.1:8888"
+    NODE_EXTRA_CA_CERTS: /etc/bedrock-proxy/ca.crt
+    AWS_BEARER_TOKEN_BEDROCK: dummy
+    AWS_DEFAULT_REGION: ap-northeast-1
+    NO_PROXY: "googleapis.com,.googleapis.com,google.com,.google.com,chatwork.com,.chatwork.com,slack.com,.slack.com,.slack-edge.com,anthropic.com,.anthropic.com"
+    no_proxy: "googleapis.com,.googleapis.com,google.com,.google.com,chatwork.com,.chatwork.com,slack.com,.slack.com,.slack-edge.com,anthropic.com,.anthropic.com"
 ```
 
-Then reload and restart hookd:
+Then reload hookd:
 
 ```bash
-sudo systemctl daemon-reload
-sudo systemctl restart hookd
+sudo systemctl reload hookd
+```
+
+Each route or schedule that uses Bedrock opts in with `env_group: bedrock`:
+
+```yaml
+schedules:
+  - name: nightly-report
+    cron: '0 3 * * *'
+    script: /home/alice/scripts/report.sh
+    env_group: bedrock
+```
+
+Per-route/per-schedule `env:` entries and exports inside the script override
+group values, so an existing job that already sets any of these variables
+keeps working during migration.
+
+**Migrating from the unit-based setup**: earlier deployments injected these
+variables into every job via `Environment=` lines in
+`/etc/systemd/system/hookd.service`. Once the env group is in place and every
+Bedrock job carries `env_group: bedrock`, remove those `Environment=` lines
+and run `sudo systemctl daemon-reload && sudo systemctl restart hookd`.
+Until they are removed, non-Bedrock jobs still receive the proxy variables.
+
+### NO_PROXY maintenance
+
+The proxy intercepts **all** HTTPS CONNECT traffic from a job, but its
+certificate only covers `*.amazonaws.com`. Any other destination reached
+through the proxy fails TLS validation. `NO_PROXY` is therefore a list of
+every non-AWS destination a Bedrock job talks to — it cannot be written as
+"everything except AWS".
+
+- **When a job gains a new external integration, append `host,.host` to BOTH
+  `NO_PROXY` and `no_proxy`** in the env group, then
+  `sudo systemctl reload hookd`. A missing entry fails silently — that
+  destination breaks with a certificate error while everything else works.
+- Both spellings are required because clients disagree on which one they
+  read: Python `httplib2` reads only `no_proxy`, `requests`/`urllib` read
+  both, `claude` (Node) and `curl` read `NO_PROXY`.
+- **Never set `NO_PROXY: "*"`** — Bedrock traffic would bypass the proxy too,
+  the `dummy` token would never be replaced with the real one, and every
+  Bedrock job would fail authentication.
+
+Check that a host bypasses the proxy:
+
+```bash
+NO_PROXY=<list> no_proxy=<list> \
+  python3 -c 'import urllib.request as u; print(u.proxy_bypass("oauth2.googleapis.com"))'
+# → True
 ```
 
 ### Management

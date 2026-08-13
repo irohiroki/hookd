@@ -76,8 +76,12 @@ def main():
     server.schedules = initial_schedules
 
     def _reload():
-        new_routes = load_all_routes(args.config, routes_dir, logger)
-        new_schedules = load_all_schedules(args.config, routes_dir, logger)
+        try:
+            new_routes = load_all_routes(args.config, routes_dir, logger)
+            new_schedules = load_all_schedules(args.config, routes_dir, logger)
+        except Exception as e:
+            logger.error('reload failed, keeping previous config: %s', e)
+            return
         with routes_lock:
             server.routes = new_routes
         with schedules_lock:
