@@ -93,6 +93,8 @@ pidfile: $HOOKD_DIR/hookd.pid
 
 routes_dir: $HOOKD_ROUTES_DIR
 
+env_groups: {}
+
 routes: []
 schedules: []
 CONF

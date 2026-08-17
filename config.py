@@ -37,6 +37,53 @@ def _apply_route_defaults(route):
     route.setdefault('match', {})
 
 
+def _load_env_groups(base, logger=None):
+    """Return normalized env groups from a parsed config: {name: {key: str(value)}}.
+
+    Keys are kept verbatim (no case folding — lowercase keys like no_proxy are
+    significant); keys containing '=' or NUL are skipped as they cannot be
+    passed through exec.
+    """
+    raw = base.get('env_groups') or {}
+    if not isinstance(raw, dict):
+        if logger:
+            logger.error('config "env_groups" must be a mapping — ignored')
+        return {}
+    groups = {}
+    for name, mapping in raw.items():
+        if not isinstance(mapping, dict):
+            if logger:
+                logger.error('env group %r must be a mapping — skipped', name)
+            continue
+        env = {}
+        for k, v in mapping.items():
+            k, v = str(k), str(v)
+            if '=' in k or '\x00' in k or '\x00' in v:
+                if logger:
+                    logger.warning('env group %r: invalid key %r — skipped', name, k)
+                continue
+            env[k] = v
+        groups[name] = env
+    return groups
+
+
+def _resolve_group_env(item, env_groups, logger=None, context=''):
+    """Merge the env groups referenced by item['env_group'] (a name or list of names)."""
+    names = item.get('env_group')
+    if not names:
+        return {}
+    if isinstance(names, str):
+        names = [names]
+    env = {}
+    for name in names:
+        if name not in env_groups:
+            if logger:
+                logger.error('unknown env group %r in %s — skipped', name, context)
+            continue
+        env.update(env_groups[name])
+    return env
+
+
 def _apply_schedule_defaults(sched):
     sched.setdefault('timeout', 30)
     sched.setdefault('env', {})
@@ -48,15 +95,22 @@ def load_all_routes(base_cfg_path, routes_dir, logger=None):
     Admin routes (config.yml) are served as-is.
     User routes (routes.d/<username>.yml) are prefixed with /<username>.
     Duplicate paths: first match wins (config.yml, then alphabetical by file).
+    Routes referencing env groups via 'env_group' get the merged mapping
+    attached as '_group_env'.
     """
     with open(base_cfg_path) as f:
         base = yaml.safe_load(f)
 
+    env_groups = _load_env_groups(base, logger)
     seen_paths = set()
     routes = []
 
     for route in base.get('routes', []):
         _apply_route_defaults(route)
+        group_env = _resolve_group_env(route, env_groups, logger,
+                                       f'route {route.get("path")!r}')
+        if group_env:
+            route['_group_env'] = group_env
         seen_paths.add(route['path'])
         routes.append(route)
 
@@ -71,6 +125,10 @@ def load_all_routes(base_cfg_path, routes_dir, logger=None):
                 for route in user_cfg.get('routes', []):
                     route = dict(route)
                     _apply_route_defaults(route)
+                    group_env = _resolve_group_env(route, env_groups, logger,
+                                                   f'route {route.get("path")!r} in {filepath}')
+                    if group_env:
+                        route['_group_env'] = group_env
                     namespaced = f'/{username}{route["path"]}'
                     if namespaced in seen_paths:
                         if logger:
@@ -94,16 +152,23 @@ def load_all_schedules(base_cfg_path, routes_dir, logger=None):
     Admin schedules (config.yml) are used as-is.
     User schedules (routes.d/<username>.yml) are prefixed with <username>/.
     Duplicate names: first match wins.
+    Schedules referencing env groups via 'env_group' get the merged mapping
+    attached as '_group_env'.
     """
     with open(base_cfg_path) as f:
         base = yaml.safe_load(f)
 
+    env_groups = _load_env_groups(base, logger)
     seen_names = set()
     schedules = []
 
     for sched in base.get('schedules', []):
         sched = dict(sched)
         _apply_schedule_defaults(sched)
+        group_env = _resolve_group_env(sched, env_groups, logger,
+                                       f'schedule {sched.get("name")!r}')
+        if group_env:
+            sched['_group_env'] = group_env
         try:
             sched['_parsed_cron'] = parse_cron(sched['cron'])
         except (ValueError, KeyError) as e:
@@ -124,6 +189,10 @@ def load_all_schedules(base_cfg_path, routes_dir, logger=None):
                 for sched in user_cfg.get('schedules', []):
                     sched = dict(sched)
                     _apply_schedule_defaults(sched)
+                    group_env = _resolve_group_env(sched, env_groups, logger,
+                                                   f'schedule {sched.get("name")!r} in {filepath}')
+                    if group_env:
+                        sched['_group_env'] = group_env
                     namespaced = f'{username}/{sched["name"]}'
                     if namespaced in seen_names:
                         if logger:

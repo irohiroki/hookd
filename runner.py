@@ -13,6 +13,7 @@ _NON_POSIX_RE = re.compile(r'[^A-Z0-9_]')
 
 def build_webhook_env(route, payload, body_bytes, path):
     env = os.environ.copy()
+    env.update(route.get('_group_env', {}))
     env.update(_owner_env(route.get('_owner')))
     for key, val in payload.items():
         env_key = 'WEBHOOK_PAYLOAD_' + _NON_POSIX_RE.sub('_', key.upper())
@@ -27,6 +28,7 @@ def build_webhook_env(route, payload, body_bytes, path):
 
 def build_schedule_env(sched, triggered_at):
     env = os.environ.copy()
+    env.update(sched.get('_group_env', {}))
     env.update(_owner_env(sched.get('_owner')))
     env['SCHEDULE_NAME'] = sched['name']
     env['SCHEDULE_CRON'] = sched['cron']

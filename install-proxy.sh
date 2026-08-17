@@ -59,10 +59,16 @@ systemctl enable --now bedrock-proxy
 echo
 echo "bedrock-proxy is running on 127.0.0.1:$PROXY_PORT"
 echo
-echo "Add to /etc/systemd/system/hookd.service [Service]:"
-echo "  Environment=AWS_BEARER_TOKEN_BEDROCK=dummy"
-echo "  Environment=HTTPS_PROXY=http://127.0.0.1:$PROXY_PORT"
-echo "  Environment=NODE_EXTRA_CA_CERTS=$CONFIG_DIR/ca.crt"
-echo "  Environment=AWS_DEFAULT_REGION=$BEDROCK_REGION"
+echo "Add to hookd's config.yml:"
+echo "  env_groups:"
+echo "    bedrock:"
+echo "      CLAUDE_CODE_USE_BEDROCK: \"1\""
+echo "      HTTPS_PROXY: \"http://127.0.0.1:$PROXY_PORT\""
+echo "      NODE_EXTRA_CA_CERTS: $CONFIG_DIR/ca.crt"
+echo "      AWS_BEARER_TOKEN_BEDROCK: dummy"
+echo "      AWS_DEFAULT_REGION: $BEDROCK_REGION"
+echo "      NO_PROXY: \"<every non-AWS destination — see DEPLOY.md § NO_PROXY maintenance>\""
+echo "      no_proxy: \"<same as NO_PROXY>\""
 echo
-echo "Then: systemctl daemon-reload && systemctl restart hookd"
+echo "then add 'env_group: bedrock' to each Bedrock route/schedule and run:"
+echo "  systemctl reload hookd"

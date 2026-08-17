@@ -122,7 +122,14 @@ for name, (data, mode) in files.items():
     print(f"  wrote {path}")
 
 print()
-print("Add to /etc/systemd/system/hookd.service [Service]:")
-print(f"  Environment=AWS_BEARER_TOKEN_BEDROCK=dummy")
-print(f"  Environment=HTTPS_PROXY=http://127.0.0.1:{PROXY_PORT}")
-print(f"  Environment=NODE_EXTRA_CA_CERTS={CONFIG_DIR}/ca.crt")
+print("Add to hookd's config.yml:")
+print("  env_groups:")
+print("    bedrock:")
+print('      CLAUDE_CODE_USE_BEDROCK: "1"')
+print(f'      HTTPS_PROXY: "http://127.0.0.1:{PROXY_PORT}"')
+print(f"      NODE_EXTRA_CA_CERTS: {CONFIG_DIR}/ca.crt")
+print("      AWS_BEARER_TOKEN_BEDROCK: dummy")
+if region:
+    print(f"      AWS_DEFAULT_REGION: {region}")
+print('      NO_PROXY: "<every non-AWS destination — see DEPLOY.md § NO_PROXY maintenance>"')
+print('      no_proxy: "<same as NO_PROXY>"')
