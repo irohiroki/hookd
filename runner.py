@@ -2,12 +2,30 @@
 
 import json
 import os
+import pwd
 import re
 import subprocess
 
 from user import _owner_env
 
 MAX_BODY_BYTES = 1 * 1024 * 1024  # 1 MB
+
+
+def _otel_attrs(owner, script):
+    parts = ["platform=hive"]
+    if owner:
+        parts.append(f"owner={owner}")
+        try:
+            home = pwd.getpwnam(owner).pw_dir
+            rel = os.path.relpath(script, home)
+        except KeyError:
+            rel = script
+    else:
+        rel = script
+    parts.append(f"step.tag={rel}")
+    return ",".join(parts)
+
+
 _NON_POSIX_RE = re.compile(r'[^A-Z0-9_]')
 
 
@@ -22,6 +40,7 @@ def build_webhook_env(route, payload, body_bytes, path):
     env['WEBHOOK_METHOD'] = 'POST'
     for k, v in route.get('env', {}).items():
         env[k] = str(v)
+    env['OTEL_RESOURCE_ATTRIBUTES'] = _otel_attrs(route.get('_owner'), route['script'])
     return env
 
 
@@ -33,6 +52,7 @@ def build_schedule_env(sched, triggered_at):
     env['SCHEDULE_TRIGGERED_AT'] = triggered_at.isoformat()
     for k, v in sched.get('env', {}).items():
         env[k] = str(v)
+    env['OTEL_RESOURCE_ATTRIBUTES'] = _otel_attrs(sched.get('_owner'), sched['script'])
     return env
 
 
