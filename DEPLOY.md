@@ -87,7 +87,7 @@ sudo systemctl is-enabled hookd
 
 ## Updating the admin config
 
-`routes`, `schedules` and `env_groups` in `config.yml` are re-read on reload:
+`routes`, `schedules`, `daemons` and `env_groups` in `config.yml` are re-read on reload:
 
 ```bash
 sudo systemctl reload hookd     # or: kill -HUP $(cat /path/to/hookd.pid)

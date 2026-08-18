@@ -58,6 +58,17 @@ def build_schedule_env(sched, triggered_at):
     return env
 
 
+def build_daemon_env(daemon):
+    env = os.environ.copy()
+    env.update(daemon.get('_group_env', {}))
+    env.update(_owner_env(daemon.get('_owner')))
+    env['DAEMON_NAME'] = daemon['name']
+    for k, v in daemon.get('env', {}).items():
+        env[k] = str(v)
+    env['OTEL_RESOURCE_ATTRIBUTES'] = _otel_attrs(daemon.get('_owner'), daemon['script'])
+    return env
+
+
 def run_script_sync(script, env, timeout, logger, preexec_fn=None):
     try:
         result = subprocess.run(

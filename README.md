@@ -4,12 +4,14 @@ A webhook receiver and cron schedule dispatcher that runs shell scripts based
 on HTTP request paths, JSON payload conditions, and time-based schedules —
 inspired by GitHub Actions workflow triggers.
 
-Two trigger types are supported:
+Three trigger types are supported:
 
 - **Webhook**: a `POST` request to a registered path dispatches a script,
   optionally filtered by payload conditions and verified by HMAC-SHA256 signature.
 - **Schedule**: a cron expression triggers a script at the configured time,
   analogous to GitHub Actions `on: schedule`.
+- **Daemon**: a long-running process registered by a start script; hookd checks
+  health on a configurable interval and restarts it if the check fails.
 
 ## Requirements
 
@@ -38,18 +40,18 @@ To start hookd in the foreground for local testing:
 python3 hookd.py --config config.yml
 ```
 
-## Registering routes and schedules
+## Registering routes, schedules, and daemons
 
 Each user registers their own configuration with `hookctl`:
 
 ```bash
 hookctl my-config.yml
-# registered 1 route(s) and 1 schedule(s) for alice — hookd will reload within 2 seconds
+# registered 1 route(s) and 1 schedule(s) and 1 daemon(s) for alice — hookd will reload within 2 seconds
 ```
 
-Routes and schedules from `my-config.yml` are automatically namespaced under the
-current Unix username. A user named `alice` with `path: /deploy/app` will have
-that route served at `/alice/deploy/app`.
+Routes, schedules, and daemons from `my-config.yml` are automatically namespaced
+under the current Unix username. A user named `alice` with `path: /deploy/app`
+will have that route served at `/alice/deploy/app`.
 
 ## Configuration
 
@@ -74,6 +76,8 @@ env_groups: {}    # named env var sets jobs opt into with `env_group:` (admin-on
 routes: []
 
 schedules: []
+
+daemons: []
 ```
 
 ### User config file format
@@ -96,10 +100,23 @@ schedules:
     timeout: 120                 # default: 30
     env:
       REPORT_TYPE: weekly
+
+daemons:
+  - name: my-agent              # internal ID: <username>/my-agent
+    script: /home/alice/start-agent.sh    # runs to start the daemon, then exits
+    health_check: /home/alice/check-agent.sh  # exit 0 = healthy; non-0 = restart
+    health_interval: 60         # seconds between health checks; default: 60
+    env:
+      PORT: "8080"
 ```
 
-Forbidden keys in user files: `server`, `log`, `env_groups`. Routes and
-schedules may *reference* admin-defined env groups with `env_group: <name>`.
+The start script is executed when hookd starts and whenever the health check
+fails. It should be idempotent if multiple rapid restarts are possible, but
+because hookd waits for the health check before retrying, a plain "start if not
+running" pattern is sufficient in most cases.
+
+Forbidden keys in user files: `server`, `log`, `env_groups`. Routes, schedules,
+and daemons may *reference* admin-defined env groups with `env_group: <name>`.
 
 ### Route fields
 
@@ -128,6 +145,21 @@ schedules may *reference* admin-defined env groups with `env_group: <name>`.
 **Cron syntax** supports: `*`, numbers, ranges (`1-5`), steps (`*/15`, `0-30/5`),
 and comma-separated lists (`1,3,5`). Day-of-week: `0` and `7` both mean Sunday.
 
+### Daemon fields
+
+| Field | Required | Description |
+|---|---|---|
+| `name` | yes | Unique identifier within the user's config |
+| `script` | yes | Absolute path to the start script |
+| `health_check` | yes | Absolute path to the health check script |
+| `health_interval` | no | Seconds between health checks; default `60` |
+| `env_group` | no | Admin-defined env group name (or list of names) to opt into |
+| `env` | no | Extra environment variables passed to the start and health check scripts |
+
+Both `script` and `health_check` receive the same environment (including `DAEMON_NAME`
+and any `env`/`env_group` values). The health check runs with a fixed 10-second
+timeout; the start script runs with a fixed 30-second timeout.
+
 ## Environment variables passed to scripts
 
 ### Webhook triggers
@@ -147,12 +179,18 @@ and comma-separated lists (`1,3,5`). Day-of-week: `0` and `7` both mean Sunday.
 | `SCHEDULE_CRON` | The cron expression |
 | `SCHEDULE_TRIGGERED_AT` | ISO 8601 timestamp of the trigger time |
 
+### Daemon triggers
+
+| Variable | Value |
+|---|---|
+| `DAEMON_NAME` | Full daemon name, e.g. `alice/my-agent` |
+
 ### Precedence
 
 Scripts receive, from weakest to strongest: the daemon's own environment,
 the env groups the job opted into via `env_group:`, the owner's `USER`/`HOME`,
-the built-in `WEBHOOK_*`/`SCHEDULE_*` variables, and finally the job's own
-`env:` entries.
+the built-in `WEBHOOK_*`/`SCHEDULE_*`/`DAEMON_*` variables, and finally the
+job's own `env:` entries.
 
 ## Signature verification
 

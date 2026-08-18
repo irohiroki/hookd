@@ -16,10 +16,10 @@ from datetime import datetime
 from http.server import ThreadingHTTPServer
 from logging.handlers import RotatingFileHandler
 
-from config import load_all_routes, load_all_schedules, load_config
+from config import load_all_daemons, load_all_routes, load_all_schedules, load_config
 from cron import cron_matches
 from handler import HookHandler
-from runner import build_schedule_env, run_script_sync
+from runner import build_daemon_env, build_schedule_env, run_script_sync
 from user import _make_preexec
 
 
@@ -64,21 +64,26 @@ def main():
 
     routes_lock = threading.RLock()
     schedules_lock = threading.RLock()
+    daemons_lock = threading.RLock()
 
     initial_routes = load_all_routes(args.config, routes_dir, logger)
     initial_schedules = load_all_schedules(args.config, routes_dir, logger)
+    initial_daemons = load_all_daemons(args.config, routes_dir, logger)
 
     server = ThreadingHTTPServer((host, port), HookHandler)
     server.logger = logger
     server.routes_lock = routes_lock
     server.schedules_lock = schedules_lock
+    server.daemons_lock = daemons_lock
     server.routes = initial_routes
     server.schedules = initial_schedules
+    server.daemons = initial_daemons
 
     def _reload():
         try:
             new_routes = load_all_routes(args.config, routes_dir, logger)
             new_schedules = load_all_schedules(args.config, routes_dir, logger)
+            new_daemons = load_all_daemons(args.config, routes_dir, logger)
         except Exception as e:
             logger.error('reload failed, keeping previous config: %s', e)
             return
@@ -86,8 +91,10 @@ def main():
             server.routes = new_routes
         with schedules_lock:
             server.schedules = new_schedules
-        logger.info('reloaded: %d route(s), %d schedule(s)',
-                    len(new_routes), len(new_schedules))
+        with daemons_lock:
+            server.daemons = new_daemons
+        logger.info('reloaded: %d route(s), %d schedule(s), %d daemon(s)',
+                    len(new_routes), len(new_schedules), len(new_daemons))
 
     def _on_sighup(signum, frame):
         logger.info('SIGHUP received, reloading')
@@ -128,7 +135,62 @@ def main():
                         preexec_fn=preexec_fn,
                     )
 
-    for func, name in [(_watch_reload, 'watcher'), (_schedule_runner, 'scheduler')]:
+    def _daemon_manager():
+        next_check = {}
+
+        def _run_script(script, owner, env):
+            run_script_sync(script, env, timeout=30, logger=logger,
+                            preexec_fn=_make_preexec(owner))
+
+        def _is_healthy(daemon, env):
+            hc = daemon.get('health_check')
+            if not hc:
+                return False
+            rc, _ = run_script_sync(hc, env, timeout=10, logger=logger,
+                                    preexec_fn=_make_preexec(daemon.get('_owner')))
+            return rc == 0
+
+        def _check_and_start(daemon):
+            env = build_daemon_env(daemon)
+            if not _is_healthy(daemon, env):
+                logger.info('daemon name=%s starting', daemon['name'])
+                _run_script(daemon['script'], daemon.get('_owner'), env)
+
+        with daemons_lock:
+            current = list(server.daemons)
+        now = time.monotonic()
+        for d in current:
+            _check_and_start(d)
+            next_check[d['name']] = now + d['health_interval']
+
+        while True:
+            with daemons_lock:
+                current = list(server.daemons)
+            now = time.monotonic()
+            current_names = {d['name'] for d in current}
+
+            for d in current:
+                if d['name'] not in next_check:
+                    _check_and_start(d)
+                    next_check[d['name']] = now + d['health_interval']
+
+            for name in list(next_check):
+                if name not in current_names:
+                    del next_check[name]
+
+            for d in current:
+                if next_check.get(d['name'], 0) <= now:
+                    env = build_daemon_env(d)
+                    if not _is_healthy(d, env):
+                        logger.info('daemon name=%s unhealthy, restarting', d['name'])
+                        _run_script(d['script'], d.get('_owner'), env)
+                    next_check[d['name']] = now + d['health_interval']
+
+            sleep_secs = max(1, min(next_check.values()) - time.monotonic()) if next_check else 60
+            time.sleep(sleep_secs)
+
+    for func, name in [(_watch_reload, 'watcher'), (_schedule_runner, 'scheduler'),
+                        (_daemon_manager, 'daemon-manager')]:
         threading.Thread(target=func, daemon=True, name=name).start()
 
     def _shutdown(signum, frame):
@@ -137,8 +199,8 @@ def main():
 
     signal.signal(signal.SIGTERM, _shutdown)
 
-    logger.info('Listening on %s:%d — %d route(s), %d schedule(s)',
-                host, port, len(initial_routes), len(initial_schedules))
+    logger.info('Listening on %s:%d — %d route(s), %d schedule(s), %d daemon(s)',
+                host, port, len(initial_routes), len(initial_schedules), len(initial_daemons))
     try:
         server.serve_forever()
     except KeyboardInterrupt:

@@ -23,10 +23,13 @@ def load_config(path):
     cfg.setdefault('pidfile', '/home/rocky/hookd/hookd.pid')
     cfg.setdefault('routes', [])
     cfg.setdefault('schedules', [])
+    cfg.setdefault('daemons', [])
     for route in cfg['routes']:
         _apply_route_defaults(route)
     for sched in cfg['schedules']:
         _apply_schedule_defaults(sched)
+    for daemon in cfg['daemons']:
+        _apply_daemon_defaults(daemon)
     return cfg
 
 
@@ -89,6 +92,12 @@ def _apply_schedule_defaults(sched):
     sched.setdefault('env', {})
 
 
+def _apply_daemon_defaults(daemon):
+    daemon.setdefault('health_interval', 60)
+    daemon.setdefault('health_check', None)
+    daemon.setdefault('env', {})
+
+
 def load_all_routes(base_cfg_path, routes_dir, logger=None):
     """Return merged routes from config.yml and all routes.d/*.yml files.
 
@@ -144,6 +153,64 @@ def load_all_routes(base_cfg_path, routes_dir, logger=None):
                     logger.error('failed to load routes from %s: %s', filepath, e)
 
     return routes
+
+
+def load_all_daemons(base_cfg_path, routes_dir, logger=None):
+    """Return merged daemons from config.yml and all routes.d/*.yml files.
+
+    Admin daemons (config.yml) are used as-is.
+    User daemons (routes.d/<username>.yml) are prefixed with <username>/.
+    Duplicate names: first match wins.
+    Daemons referencing env groups via 'env_group' get the merged mapping
+    attached as '_group_env'.
+    """
+    with open(base_cfg_path) as f:
+        base = yaml.safe_load(f)
+
+    env_groups = _load_env_groups(base, logger)
+    seen_names = set()
+    daemons = []
+
+    for daemon in base.get('daemons', []):
+        daemon = dict(daemon)
+        _apply_daemon_defaults(daemon)
+        group_env = _resolve_group_env(daemon, env_groups, logger,
+                                       f'daemon {daemon.get("name")!r}')
+        if group_env:
+            daemon['_group_env'] = group_env
+        seen_names.add(daemon['name'])
+        daemons.append(daemon)
+
+    if os.path.isdir(routes_dir):
+        for filepath in sorted(glob.glob(os.path.join(routes_dir, '*.yml'))):
+            username = os.path.basename(filepath)[:-4]
+            try:
+                with open(filepath) as f:
+                    user_cfg = yaml.safe_load(f)
+                if not isinstance(user_cfg, dict):
+                    continue
+                for daemon in user_cfg.get('daemons', []):
+                    daemon = dict(daemon)
+                    _apply_daemon_defaults(daemon)
+                    group_env = _resolve_group_env(daemon, env_groups, logger,
+                                                   f'daemon {daemon.get("name")!r} in {filepath}')
+                    if group_env:
+                        daemon['_group_env'] = group_env
+                    namespaced = f'{username}/{daemon["name"]}'
+                    if namespaced in seen_names:
+                        if logger:
+                            logger.warning('duplicate daemon %s in %s — skipped',
+                                           namespaced, filepath)
+                        continue
+                    seen_names.add(namespaced)
+                    daemon['name'] = namespaced
+                    daemon['_owner'] = username
+                    daemons.append(daemon)
+            except Exception as e:
+                if logger:
+                    logger.error('failed to load daemons from %s: %s', filepath, e)
+
+    return daemons
 
 
 def load_all_schedules(base_cfg_path, routes_dir, logger=None):
