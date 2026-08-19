@@ -11,8 +11,7 @@ Type=simple
 User=rocky
 Group=rocky
 WorkingDirectory=/home/rocky/hookd
-ExecStart=/usr/bin/python3 /home/rocky/hookd/hookd.py \
-    --config /home/rocky/hookd/config.yml
+ExecStart=/usr/local/bin/hookd --config /home/rocky/hookd/config.yml
 ExecReload=/bin/kill -HUP $MAINPID
 Restart=on-failure
 RestartSec=5

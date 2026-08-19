@@ -10,21 +10,23 @@
 # Environment variables:
 #   HOOKD_USER       Service user account (required when running as root)
 #   HOOKD_PORT       Listening port (default: 9000)
-#   HOOKD_ROUTES_DIR Per-user config directory (default: /var/lib/hookd/routes.d)
+#   HOOKD_ROUTES_DIR Per-user config directory (default: /var/lib/hookd/routes.d);
+#                    recorded in /etc/hookd/routes_dir for hookd and hookctl to read
 #   HOOKD_DIR        Install directory (default: ~/hookd)
 
 set -euo pipefail
 
-REPO_RAW="https://raw.githubusercontent.com/irohiroki/hookd/main"
-MODULES="hookd.py cron.py config.py handler.py runner.py user.py"
+REPO_URL="https://github.com/irohiroki/hookd.git"
+HOOKD_REF="${HOOKD_REF:-main}"
 
 HOOKD_PORT="${HOOKD_PORT:-9000}"
 HOOKD_ROUTES_DIR="${HOOKD_ROUTES_DIR:-/var/lib/hookd/routes.d}"
 
 die() { echo "error: $*" >&2; exit 1; }
 
-command -v curl    > /dev/null 2>&1 || die "curl is required"
 command -v python3 > /dev/null 2>&1 || die "python3 is required"
+command -v pip3    > /dev/null 2>&1 || die "pip3 is required"
+command -v git     > /dev/null 2>&1 || die "git is required"
 
 if [[ "$EUID" -eq 0 ]]; then
     [[ -n "${HOOKD_USER:-}" ]] || die "HOOKD_USER must be set when running as root"
@@ -54,14 +56,19 @@ if [[ "$IS_ROOT" -eq 1 ]]; then
     mkdir -p "$HOOKD_ROUTES_DIR"
     python3 -c "import os; os.chmod('$HOOKD_ROUTES_DIR', 0o1777)"
 
-    echo "Installing /usr/local/bin/hookctl"
-    curl -fsSL "$REPO_RAW/hookctl" \
-        | sed "s|ROUTES_DIR = '/home/rocky/hookd/routes.d'|ROUTES_DIR = '$HOOKD_ROUTES_DIR'|" \
-        > /usr/local/bin/hookctl
-    chmod 755 /usr/local/bin/hookctl
+    echo "Installing hookd via pip ($HOOKD_REF)"
+    pip3 install --quiet "git+$REPO_URL@$HOOKD_REF"
+
+    echo "Recording $HOOKD_ROUTES_DIR in /etc/hookd/routes_dir"
+    install -d -m 755 /etc/hookd
+    printf '%s\n' "$HOOKD_ROUTES_DIR" > /etc/hookd/routes_dir
+    chmod 644 /etc/hookd/routes_dir
+    rm -f /etc/profile.d/hookd.sh
 
     echo "Installing /etc/systemd/system/hookd.service"
-    curl -fsSL "$REPO_RAW/hookd.service" \
+    pip3 show -f hookd 2>/dev/null \
+        | awk '/^Location:/{loc=$2} /hookd\.service/{print loc"/"$1}' \
+        | xargs cat \
         | sed \
             -e "s|User=rocky|User=$HOOKD_USER|" \
             -e "s|Group=rocky|Group=$HOOKD_GROUP|" \
@@ -69,13 +76,9 @@ if [[ "$IS_ROOT" -eq 1 ]]; then
         > /etc/systemd/system/hookd.service
 fi
 
-# User-level setup
-echo "Installing hookd to $HOOKD_DIR"
+# User-level setup (config and data directory only; Python code installed via pip)
+echo "Creating $HOOKD_DIR"
 mkdir -p "$HOOKD_DIR"
-
-for mod in $MODULES; do
-    curl -fsSL "$REPO_RAW/$mod" -o "$HOOKD_DIR/$mod"
-done
 
 if [[ ! -f "$HOOKD_DIR/config.yml" ]]; then
     cat > "$HOOKD_DIR/config.yml" << CONF
@@ -97,6 +100,7 @@ env_groups: {}
 
 routes: []
 schedules: []
+daemons: []
 CONF
     chmod 600 "$HOOKD_DIR/config.yml"
 fi

@@ -8,7 +8,8 @@ This guide covers installation and day-to-day operations.
 |---|---|
 | Rocky Linux 9 / RHEL 9-compatible | `cat /etc/os-release` |
 | Python 3.9+ with PyYAML | `python3 -c 'import yaml'` |
-| curl | `curl --version` |
+| pip3 | `pip3 --version` |
+| git | `git --version` |
 | systemd | `systemctl --version` |
 
 ## Install
@@ -29,8 +30,13 @@ already exist.
 |---|---|---|
 | `HOOKD_USER` | — | Service user account (required when root) |
 | `HOOKD_PORT` | `9000` | Listening port |
-| `HOOKD_ROUTES_DIR` | `/var/lib/hookd/routes.d` | Per-user config directory |
+| `HOOKD_ROUTES_DIR` | `/var/lib/hookd/routes.d` | Per-user config directory; recorded in `/etc/hookd/routes_dir` at install time |
 | `HOOKD_DIR` | `~/hookd` | Install directory |
+
+These are read by `install.sh` only. Nothing reads the environment at runtime:
+`hookd` takes its config path from `ExecStart` in the unit, and `hookctl` reads
+the per-user config directory from `/etc/hookd/routes_dir` (falling back to
+`/var/lib/hookd/routes.d` if that file is missing).
 
 ### Split roles
 
@@ -67,14 +73,17 @@ When run as root with `HOOKD_USER` set:
 
 1. Creates the service user's home directory if it does not exist
 2. Creates `HOOKD_ROUTES_DIR` so any user can write their own config file
-3. Downloads and installs `hookctl` to `/usr/local/bin/`
-4. Downloads and installs `hookd.service` to `/etc/systemd/system/` with all
-   paths and the user name substituted
-5. Downloads the six Python modules to `HOOKD_DIR`
-6. Generates `config.yml` in `HOOKD_DIR` (skipped if already present)
+3. Runs `pip3 install git+https://github.com/irohiroki/hookd.git@$HOOKD_REF`,
+   which installs `hookd` and `hookctl` to `/usr/local/bin/`
+4. Writes `HOOKD_ROUTES_DIR` to `/etc/hookd/routes_dir` (mode 644) so `hookd` and
+   `hookctl` resolve the same directory, and removes the obsolete
+   `/etc/profile.d/hookd.sh`
+5. Installs `hookd.service` to `/etc/systemd/system/` with paths and user name substituted
+6. Creates `HOOKD_DIR` and generates `config.yml` there (skipped if already present)
 7. Enables the service to persist across logins and starts it
 
-When run without root, steps 1–4 and 7 are skipped.
+When run without root, steps 1–5 and 7 are skipped — only `HOOKD_DIR` and
+`config.yml` are created.
 
 ## Management
 
@@ -103,10 +112,75 @@ sudo systemctl restart hookd
 User-registered routes and schedules reload automatically within 2 seconds of a
 `hookctl` invocation — no restart needed.
 
+## Deploying code updates
+
+Use `deploy.sh` from the repository root to push the current working tree to
+an existing installation:
+
+```bash
+./deploy.sh <hostname>
+```
+
+The script archives the current git HEAD with `git archive`, pipes it to the
+remote host, installs via `sudo pip3 install`, and restarts hookd. The host must
+be reachable via SSH without extra options, sudo must be available, and pip3 must
+be installed.
+
+Alternatively, on the remote host directly:
+
+```bash
+git clone https://github.com/irohiroki/hookd.git
+sudo pip3 install hookd/
+sudo systemctl restart hookd
+```
+
 Note: re-running `install.sh` as root regenerates
 `/etc/systemd/system/hookd.service`, discarding any manual edits to the unit.
-To update only the Python modules, run `install.sh` as the service user
-(non-root) — the unit and an existing `config.yml` are left untouched.
+
+## Upgrading from a server-local clone
+
+`upgrade.sh` updates an installation from a clone kept on the host itself — no
+SSH round trip, and no path to choose. The repository path is fixed at
+`/var/lib/hookd/repo`.
+
+One-time setup, as root:
+
+```bash
+sudo install -d -o root -g root -m 755 /var/lib/hookd
+sudo git clone -b main https://github.com/irohiroki/hookd.git /var/lib/hookd/repo
+```
+
+Every later update:
+
+```bash
+sudo /var/lib/hookd/repo/upgrade.sh
+```
+
+The script fetches the upstream of the currently checked-out branch, force-syncs
+the worktree to it (`reset --hard` plus `clean -fd`), runs `pip3 install .`, and
+restarts hookd. When the upstream tip is already checked out and the worktree is
+clean it prints `Already up to date` and leaves the service alone.
+
+To follow a different branch, check it out in the clone as root first:
+
+```bash
+sudo git -C /var/lib/hookd/repo checkout -B <branch> --track origin/<branch>
+```
+
+`pip3 install .` runs the project's build backend as root, so write access to the
+clone is equivalent to root access. The script therefore refuses to run unless
+`/var/lib/hookd/repo`, every ancestor directory, and every file in the tree are
+owned by root and not writable by group or other — clone it as root with the
+default `umask 022`, and keep it out of the service user's reach. hookd runs
+user-supplied scripts as that user, so a clone it could write to would turn a
+compromise of that account into root at the next upgrade. `/var/lib/hookd/routes.d`
+being mode `1777` does not weaken this: `repo` is a sibling directory, and
+`/var/lib/hookd` itself must stay `root:root` `755`.
+
+Unlike `install.sh`, `upgrade.sh` never rewrites
+`/etc/systemd/system/hookd.service` or `/etc/hookd/routes_dir`, so manual edits
+to those survive an upgrade. Local edits and local commits inside the clone do
+not — they are discarded on every run.
 
 ## Log rotation
 

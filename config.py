@@ -7,6 +7,24 @@ import yaml
 
 from cron import parse_cron
 
+SYSTEM_ROUTES_DIR_FILE = '/etc/hookd/routes_dir'
+FALLBACK_ROUTES_DIR = '/var/lib/hookd/routes.d'
+
+
+def default_routes_dir():
+    """Return the per-user config directory recorded by install.sh.
+
+    hookd and hookctl must agree on this path without depending on the caller's
+    environment, so the admin's choice is written once to a root-owned,
+    world-readable file and read from there by both.
+    """
+    try:
+        with open(SYSTEM_ROUTES_DIR_FILE) as f:
+            path = f.read().strip()
+    except OSError:
+        path = ''
+    return path or FALLBACK_ROUTES_DIR
+
 
 def load_config(path):
     with open(path) as f:
@@ -19,7 +37,7 @@ def load_config(path):
     cfg['log'].setdefault('level', 'INFO')
     cfg['log'].setdefault('max_bytes', 10 * 1024 * 1024)
     cfg['log'].setdefault('backup_count', 5)
-    cfg.setdefault('routes_dir', '/home/rocky/hookd/routes.d')
+    cfg.setdefault('routes_dir', default_routes_dir())
     cfg.setdefault('pidfile', '/home/rocky/hookd/hookd.pid')
     cfg.setdefault('routes', [])
     cfg.setdefault('schedules', [])

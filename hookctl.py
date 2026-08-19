@@ -13,6 +13,9 @@ Schedule and daemon names are stored internally as <username>/<name>.
 
 The file is installed as routes.d/<username>.yml and hookd reloads
 within 2 seconds via a flag file watched by the server process.
+
+The destination directory is read from /etc/hookd/routes_dir, written by
+install.sh, so it does not depend on the caller's environment.
 """
 
 import os
@@ -22,7 +25,16 @@ import sys
 
 import yaml
 
-ROUTES_DIR = '/home/rocky/hookd/routes.d'
+from config import SYSTEM_ROUTES_DIR_FILE, default_routes_dir
+
+ROUTES_DIR = default_routes_dir()
+
+
+def routes_dir_origin():
+    if os.path.exists(SYSTEM_ROUTES_DIR_FILE):
+        return f'from {SYSTEM_ROUTES_DIR_FILE}'
+    return (f'built-in default; {SYSTEM_ROUTES_DIR_FILE} is missing, '
+            'ask an admin to run install.sh')
 
 
 def die(msg):
@@ -107,7 +119,8 @@ def main():
     try:
         shutil.copy2(src, dest)
     except OSError as e:
-        die(f'failed to install config: {e}')
+        die(f'failed to install config into {ROUTES_DIR} '
+            f'({routes_dir_origin()}): {e}')
 
     reload_flag = os.path.join(ROUTES_DIR, '.reload')
     try:
