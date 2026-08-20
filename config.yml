@@ -8,7 +8,7 @@ log:
   max_bytes: 10485760
   backup_count: 5
 
-routes_dir: /home/rocky/hookd/routes.d
+routes_dir: /var/lib/hookd/routes.d
 
 env_groups: {}
 # Named env var sets that routes and schedules opt into with `env_group: <name>`

@@ -1,0 +1,31 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "hookd"
+version = "0.1.0"
+description = "Webhook receiver and cron/daemon dispatcher for Linux hosts"
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.9"
+dependencies = ["PyYAML>=6.0"]
+
+[project.urls]
+Repository = "https://github.com/irohiroki/hookd"
+
+[project.scripts]
+hookd = "hookd:main"
+hookctl = "hookctl:main"
+
+[tool.hatch.build.targets.wheel]
+include = [
+    "config.py",
+    "cron.py",
+    "handler.py",
+    "hookctl.py",
+    "hookd.py",
+    "hookd.service",
+    "runner.py",
+    "user.py",
+]

@@ -1,18 +1,21 @@
 #!/usr/bin/env python3
 """
-hookctl — register webhook routes and cron schedules with hookd.
+hookctl — register webhook routes, cron schedules, and daemons with hookd.
 
 Usage: hookctl <config.yml>
 
-The YAML file may contain 'routes' and/or 'schedules' keys. It must not
-contain 'server', 'log' or 'env_groups' keys (those are admin-only settings).
-Routes and schedules may reference admin-defined env groups via 'env_group'.
+The YAML file may contain 'routes', 'schedules', and/or 'daemons' keys.
+It must not contain 'server', 'log' or 'env_groups' keys (admin-only).
+All entries may reference admin-defined env groups via 'env_group'.
 
 Routes are served under /<username>/<path> on the hookd server.
-Schedule names are stored internally as <username>/<name>.
+Schedule and daemon names are stored internally as <username>/<name>.
 
 The file is installed as routes.d/<username>.yml and hookd reloads
 within 2 seconds via a flag file watched by the server process.
+
+The destination directory is read from /etc/hookd/routes_dir, written by
+install.sh, so it does not depend on the caller's environment.
 """
 
 import os
@@ -22,7 +25,16 @@ import sys
 
 import yaml
 
-ROUTES_DIR = '/home/rocky/hookd/routes.d'
+from config import SYSTEM_ROUTES_DIR_FILE, default_routes_dir
+
+ROUTES_DIR = default_routes_dir()
+
+
+def routes_dir_origin():
+    if os.path.exists(SYSTEM_ROUTES_DIR_FILE):
+        return f'from {SYSTEM_ROUTES_DIR_FILE}'
+    return (f'built-in default; {SYSTEM_ROUTES_DIR_FILE} is missing, '
+            'ask an admin to run install.sh')
 
 
 def die(msg):
@@ -44,9 +56,10 @@ def validate(cfg):
 
     has_routes = 'routes' in cfg
     has_schedules = 'schedules' in cfg
+    has_daemons = 'daemons' in cfg
 
-    if not has_routes and not has_schedules:
-        die('config must contain "routes" and/or "schedules"')
+    if not has_routes and not has_schedules and not has_daemons:
+        die('config must contain "routes", "schedules", and/or "daemons"')
 
     if has_routes:
         routes = cfg['routes']
@@ -70,6 +83,17 @@ def validate(cfg):
             if not validate_cron_format(sched['cron']):
                 die(f'schedule[{i}].cron must be a 5-field cron expression '
                     f'(got: {sched["cron"]!r})')
+
+    if has_daemons:
+        daemons = cfg['daemons']
+        if not isinstance(daemons, list):
+            die('"daemons" must be a list')
+        for i, daemon in enumerate(daemons):
+            for field in ('name', 'script', 'health_check'):
+                if field not in daemon:
+                    die(f'daemon[{i}] is missing required field "{field}"')
+            if 'health_interval' in daemon and not isinstance(daemon['health_interval'], int):
+                die(f'daemon[{i}].health_interval must be an integer')
 
 
 def main():
@@ -95,7 +119,8 @@ def main():
     try:
         shutil.copy2(src, dest)
     except OSError as e:
-        die(f'failed to install config: {e}')
+        die(f'failed to install config into {ROUTES_DIR} '
+            f'({routes_dir_origin()}): {e}')
 
     reload_flag = os.path.join(ROUTES_DIR, '.reload')
     try:
@@ -112,11 +137,14 @@ def main():
 
     route_count = len(cfg.get('routes', []))
     sched_count = len(cfg.get('schedules', []))
+    daemon_count = len(cfg.get('daemons', []))
     parts = []
     if route_count:
         parts.append(f'{route_count} route(s)')
     if sched_count:
         parts.append(f'{sched_count} schedule(s)')
+    if daemon_count:
+        parts.append(f'{daemon_count} daemon(s)')
     print(f'registered {" and ".join(parts)} for {username} — hookd will reload within 2 seconds')
 
 
