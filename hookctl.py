@@ -118,6 +118,7 @@ def main():
 
     try:
         shutil.copy2(src, dest)
+        os.chmod(dest, 0o644)
     except OSError as e:
         die(f'failed to install config into {ROUTES_DIR} '
             f'({routes_dir_origin()}): {e}')
